@@ -1,0 +1,26 @@
+[package]
+name = "obirt"
+description = "A simple VPN"
+keywords = ["vpn", "simple", "easy", "fast", "udp"]
+authors = ["Henry Barreto <me@henrybarreto.dev"]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+license-file= "LICENSE"
+
+[workspace]
+members = [
+    "client",
+    "server",
+]
+
+[dependencies]
+tun = { version = "0.6.1", features = ["async"] }
+packet = "0.1.4"
+toml = "0.7.6"
+serde = {version="1.0.188", features=["derive"]}
+log = "0.4.20"
+env_logger = "0.10.0"
+clap = "4.4.7"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
