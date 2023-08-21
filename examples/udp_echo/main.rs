@@ -47,42 +47,5 @@ fn main() {
 
             dev.write(&response).unwrap();
         }
-
-        /*let p = packet::ip::Packet::new(&buf[..read]).unwrap();
-
-        if let Ok(icmp) = packet::icmp::Packet::new(p.payload()) {
-            println!("icmp packet: {:?}", icmp);
-
-            let echo = icmp.echo().unwrap();
-
-            let ip = packet::ip::v4::Packet::new(&buf[..read]).unwrap();
-
-            let reply = packet::ip::v4::Builder::default()
-                .id(0x42)
-                .unwrap()
-                .ttl(64)
-                .unwrap()
-                .source(ip.destination())
-                .unwrap()
-                .destination(ip.source())
-                .unwrap()
-                .icmp()
-                .unwrap()
-                .echo()
-                .unwrap()
-                .reply()
-                .unwrap()
-                .identifier(echo.identifier())
-                .unwrap()
-                .sequence(echo.sequence())
-                .unwrap()
-                .payload(echo.payload())
-                .unwrap()
-                .build()
-                .unwrap();
-
-            let wrote = dev.write(&reply).unwrap();
-            println!("wrote {} bytes", wrote);
-        }*/
     }
 }
