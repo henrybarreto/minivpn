@@ -1,15 +1,17 @@
 use std::{
     io::{Read, Write},
-    mem::MaybeUninit,
     net::{Ipv4Addr, SocketAddrV4},
-    thread,
-    time::Duration,
 };
 
+use log::info;
+
 use packet::{self, Builder, Packet};
-use socket2::MaybeUninitSlice;
 
 fn main() {
+    env_logger::Builder::new()
+        .filter_level(log::LevelFilter::Info)
+        .init();
+
     let mut config = tun::Configuration::default();
 
     config
@@ -26,6 +28,87 @@ fn main() {
 
         if let Ok(ip) = packet::ip::v4::Packet::new(&buf[..read]) {
             match ip.protocol() {
+                packet::ip::Protocol::Icmp => {
+                    let mut socket = socket2::Socket::new_raw(
+                        socket2::Domain::IPV4,
+                        socket2::Type::RAW,
+                        Some(socket2::Protocol::ICMPV4),
+                    )
+                    .unwrap();
+
+                    // 172.17.0.2
+                    let address: socket2::SockAddr =
+                        SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 0).into();
+
+                    socket.set_header_included(true).unwrap();
+
+                    socket.connect(&address).unwrap();
+
+                    let icmp = packet::icmp::Packet::new(ip.payload()).unwrap();
+
+                    let request = packet::ip::v4::Builder::default()
+                        .id(0x01)
+                        .unwrap()
+                        .ttl(64)
+                        .unwrap()
+                        .source(Ipv4Addr::new(0, 0, 0, 0))
+                        .unwrap()
+                        .destination(Ipv4Addr::new(192, 168, 1, 100))
+                        .unwrap()
+                        .icmp()
+                        .unwrap()
+                        .echo()
+                        .unwrap()
+                        .request()
+                        .unwrap()
+                        .identifier(icmp.echo().unwrap().identifier())
+                        .unwrap()
+                        .sequence(icmp.echo().unwrap().sequence())
+                        .unwrap()
+                        // .payload(icmp.echo().unwrap().payload())
+                        // .unwrap()
+                        .build()
+                        .unwrap();
+
+                    info!("writing {:?} bytes", request);
+                    let wrote = socket.write(&request[..request.len()]).unwrap();
+                    info!("wrote {} bytes", wrote);
+
+                    let mut buffer = [0; 4096];
+                    let read = socket.read(&mut buffer).unwrap();
+                    info!("read {} bytes", read);
+
+                    let pi = packet::ip::v4::Packet::new(&buffer[..read]).unwrap();
+                    let pmci = packet::icmp::Packet::new(pi.payload()).unwrap();
+
+                    let response = packet::ip::v4::Builder::default()
+                        .id(0x01)
+                        .unwrap()
+                        .ttl(64)
+                        .unwrap()
+                        .source(ip.destination())
+                        .unwrap()
+                        .destination(ip.source())
+                        .unwrap()
+                        .icmp()
+                        .unwrap()
+                        .echo()
+                        .unwrap()
+                        .reply()
+                        .unwrap()
+                        .identifier(pmci.echo().unwrap().identifier())
+                        .unwrap()
+                        .sequence(pmci.echo().unwrap().sequence())
+                        .unwrap()
+                        // .payload(pmci.echo().unwrap().payload())
+                        // .unwrap()
+                        .build()
+                        .unwrap();
+
+                    info!("response {:?} bytes", response);
+
+                    dev.write(&response[..response.len()]).unwrap();
+                }
                 packet::ip::Protocol::Udp => {
                     if let Ok(udp) = packet::udp::Packet::new(ip.payload()) {
                         let mut socket = socket2::Socket::new_raw(
@@ -38,10 +121,10 @@ fn main() {
                         let address: socket2::SockAddr =
                             SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 0).into();
 
-                        println!("ip: {:?}", ip);
-                        println!("udp: {:?}", udp);
+                        info!("ip: {:?}", ip);
+                        info!("udp: {:?}", udp);
 
-                        println!("udp destination: {}", udp.destination());
+                        info!("udp destination: {}", udp.destination());
 
                         let request = packet::ip::v4::Builder::default()
                             .id(0x01)
@@ -65,14 +148,16 @@ fn main() {
 
                         socket.set_header_included(true).unwrap();
 
-                        println!("writing {:?} bytes", request);
-                        let wrote = socket.send_to(&request[..request.len()], &address).unwrap();
-                        println!("wrote {} bytes", wrote);
+                        socket.connect(&address).unwrap();
+
+                        info!("writing {:?} bytes", request);
+                        let wrote = socket.write(&request[..request.len()]).unwrap();
+                        info!("wrote {} bytes", wrote);
 
                         let mut buffer = [0; 4096];
                         let read = socket.read(&mut buffer).unwrap();
-                        println!("read {} bytes", read);
-                        println!("buffer: {:?}", &buffer[..read]);
+                        info!("read {} bytes", read);
+                        info!("buffer: {:?}", &buffer[..read]);
 
                         let pi = packet::ip::v4::Packet::new(&buffer[..read]).unwrap();
                         let pdu = packet::udp::Packet::new(pi.payload()).unwrap();
@@ -134,13 +219,13 @@ fn main() {
                             .build()
                             .unwrap();
 
-                        println!(">>>> tcp: {:?}", tcp);
+                        info!(">>>> tcp: {:?}", tcp);
 
                         socket.set_header_included(true).unwrap();
 
-                        println!("writing {:?} bytes", request);
+                        info!("writing {:?} bytes", request);
                         let wrote = socket.send_to(&request[..request.len()], &address).unwrap();
-                        println!("wrote {} bytes", wrote);
+                        info!("wrote {} bytes", wrote);
 
                         //MaybeUninit<u8>
                         unsafe {
@@ -161,7 +246,7 @@ fn main() {
                                 .build()
                                 .unwrap();
 
-                            println!("seila: {:?}", seila);
+                            info!("seila: {:?}", seila);
 
                             // for seila
                             for (i, s) in seila.iter().enumerate() {
@@ -169,8 +254,8 @@ fn main() {
                             }
 
                             let (read, address) = socket.recv_from(&mut bufferUninit).unwrap();
-                            println!("read {:?} bytes", read);
-                            println!("address: {:?}", address.domain());
+                            info!("read {:?} bytes", read);
+                            info!("address: {:?}", address.domain());
 
                             let mut buffer = [0; 4096];
                             for (i, uninit) in bufferUninit.iter_mut().enumerate() {
@@ -178,11 +263,11 @@ fn main() {
                             }
 
                             let pi = packet::ip::v4::Packet::new(&buffer[..read]).unwrap();
-                            println!("<<<< pi: {:?}", pi);
+                            info!("<<<< pi: {:?}", pi);
                             let pct = packet::tcp::Packet::new(pi.payload()).unwrap();
-                            println!("<<<< pct: {:?}", pct);
+                            info!("<<<< pct: {:?}", pct);
 
-                            println!("----------------------------------");
+                            info!("----------------------------------");
 
                             let response = packet::ip::v4::Builder::default()
                                 .id(0x01)
@@ -212,7 +297,7 @@ fn main() {
                         }
                     }
                 }*/
-                _ => println!("other"),
+                _ => info!("other"),
             }
         }
     }
