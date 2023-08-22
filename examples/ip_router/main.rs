@@ -119,7 +119,7 @@ fn main() {
                         .unwrap();
 
                         let address: socket2::SockAddr =
-                            SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 0).into();
+                            SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0).into();
 
                         info!("ip: {:?}", ip);
                         info!("udp: {:?}", udp);
@@ -131,7 +131,7 @@ fn main() {
                             .unwrap()
                             .ttl(64)
                             .unwrap()
-                            .source(Ipv4Addr::new(127, 0, 0, 1))
+                            .source(Ipv4Addr::new(0, 0, 0, 0))
                             .unwrap()
                             .destination(Ipv4Addr::new(127, 0, 0, 1))
                             .unwrap()
@@ -195,14 +195,14 @@ fn main() {
                         .unwrap();
 
                         let address: socket2::SockAddr =
-                            SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 8000).into();
+                            SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0).into();
 
                         let request = packet::ip::v4::Builder::default()
                             .id(0x01)
                             .unwrap()
                             .ttl(64)
                             .unwrap()
-                            .source(Ipv4Addr::new(127, 0, 0, 1))
+                            .source(Ipv4Addr::new(0, 0, 0, 0))
                             .unwrap()
                             .destination(Ipv4Addr::new(127, 0, 0, 1))
                             .unwrap()
@@ -223,78 +223,48 @@ fn main() {
 
                         socket.set_header_included(true).unwrap();
 
+                        socket.connect(&address).unwrap();
+
                         info!("writing {:?} bytes", request);
-                        let wrote = socket.send_to(&request[..request.len()], &address).unwrap();
+                        let wrote = socket.write(&request[..request.len()]).unwrap();
                         info!("wrote {} bytes", wrote);
 
-                        //MaybeUninit<u8>
-                        unsafe {
-                            let mut bufferUninit: [MaybeUninit<u8>; 4096] =
-                                MaybeUninit::uninit().assume_init();
+                        let mut buffer = [0; 4096];
+                        let read = socket.read(&mut buffer).unwrap();
+                        info!("read {:?} bytes", read);
 
-                            let seila = packet::ip::v4::Builder::default()
-                                .id(0x01)
-                                .unwrap()
-                                .ttl(64)
-                                .unwrap()
-                                .flags(ip.flags())
-                                .unwrap()
-                                .source(ip.destination())
-                                .unwrap()
-                                .destination(ip.source())
-                                .unwrap()
-                                .build()
-                                .unwrap();
+                        let pi = packet::ip::v4::Packet::new(&buffer[..read]).unwrap();
+                        info!("<<<< pi: {:?}", pi);
+                        let pct = packet::tcp::Packet::new(pi.payload()).unwrap();
+                        info!("<<<< pct: {:?}", pct);
 
-                            info!("seila: {:?}", seila);
+                        info!("----------------------------------");
 
-                            // for seila
-                            for (i, s) in seila.iter().enumerate() {
-                                bufferUninit[i] = MaybeUninit::new(*s);
-                            }
+                        let response = packet::ip::v4::Builder::default()
+                            .id(0x01)
+                            .unwrap()
+                            .ttl(64)
+                            .unwrap()
+                            .flags(pi.flags())
+                            .unwrap()
+                            .source(ip.destination())
+                            .unwrap()
+                            .destination(ip.source())
+                            .unwrap()
+                            .tcp()
+                            .unwrap()
+                            .source(tcp.destination())
+                            .unwrap()
+                            .destination(tcp.source())
+                            .unwrap()
+                            .payload(pct.payload())
+                            .unwrap()
+                            .flags(pct.flags())
+                            .unwrap()
+                            .build()
+                            .unwrap();
 
-                            let (read, address) = socket.recv_from(&mut bufferUninit).unwrap();
-                            info!("read {:?} bytes", read);
-                            info!("address: {:?}", address.domain());
-
-                            let mut buffer = [0; 4096];
-                            for (i, uninit) in bufferUninit.iter_mut().enumerate() {
-                                buffer[i] = uninit.assume_init();
-                            }
-
-                            let pi = packet::ip::v4::Packet::new(&buffer[..read]).unwrap();
-                            info!("<<<< pi: {:?}", pi);
-                            let pct = packet::tcp::Packet::new(pi.payload()).unwrap();
-                            info!("<<<< pct: {:?}", pct);
-
-                            info!("----------------------------------");
-
-                            let response = packet::ip::v4::Builder::default()
-                                .id(0x01)
-                                .unwrap()
-                                .ttl(64)
-                                .unwrap()
-                                .flags(pi.flags())
-                                .unwrap()
-                                .source(ip.destination())
-                                .unwrap()
-                                .destination(ip.source())
-                                .unwrap()
-                                .tcp()
-                                .unwrap()
-                                .source(tcp.destination())
-                                .unwrap()
-                                .destination(tcp.source())
-                                .unwrap()
-                                .payload(pct.payload())
-                                .unwrap()
-                                .flags(pct.flags())
-                                .unwrap()
-                                .build()
-                                .unwrap();
-
-                            dev.write(&response[..response.len()]).unwrap();
-                        }
+                        dev.write(&response[..response.len()]).unwrap();
                     }
                 }*/
                 _ => info!("other"),
