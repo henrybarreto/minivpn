@@ -5,7 +5,7 @@ server_ip = '10.0.0.100'  # Change this to the actual server IP
 server_port = 8000      # Change this to the actual server port
 
 # Message to send
-message = "Hello, server!"
+message = "Hello, server!, I am UDP client."
 
 # Create a UDP socket raw socket
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

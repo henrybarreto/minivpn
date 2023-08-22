@@ -19,5 +19,5 @@ while True:
     print("Received data from", client_address, ":", data.decode())
     
     # Send a response back to the client
-    response = "Hello, client!"
+    response = "Hello, client!, I am UDP server."
     server_socket.sendto(response.encode(), client_address)
