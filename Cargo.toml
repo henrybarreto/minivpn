@@ -1,16 +1,19 @@
 [package]
-name = "minivpn"
+name = "orbit"
+description = "" 
+keywords = ["vpn", "simple", "easy", "fast", "udp"]
+authors = ["Henry Barreto <me@henrybarreto.dev"]
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+license-file= "LICENSE"
 
 [dependencies]
 tun = "0.5.5"
-socket2 = {version="0.5.3", features=["all"]}
 packet = "0.1.4"
-log = "0.4.20"
-env_logger = "0.10.0"
-etherparse = "0.13.0"
 toml = "0.7.6"
 serde = {version="1.0.188", features=["derive"]}
+log = "0.4.20"
+env_logger = "0.10.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
