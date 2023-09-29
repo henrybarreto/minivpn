@@ -8,6 +8,12 @@ edition = "2021"
 license = "MIT"
 license-file= "LICENSE"
 
+[workspace]
+members = [
+    "daemon",
+    "client",
+]
+
 [dependencies]
 tun = "0.5.5"
 packet = "0.1.4"
