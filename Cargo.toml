@@ -10,8 +10,8 @@ license-file= "LICENSE"
 
 [workspace]
 members = [
-    "daemon",
     "client",
+    "server",
 ]
 
 [dependencies]
