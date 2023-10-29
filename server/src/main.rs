@@ -8,7 +8,7 @@ use std::{
 };
 
 fn main() {
-    let mut networks = HashMap::<IpAddr, TcpStream>::new();
+    let networks = HashMap::<IpAddr, TcpStream>::new();
     let mnetworks = Arc::new(Mutex::new(networks));
 
     let listener = TcpListener::bind("0.0.0.0:8081").unwrap();
@@ -68,15 +68,12 @@ fn main() {
                         dest.peer_addr().unwrap().ip()
                     );
 
-                    // value.push_str(":8080");
-
                     println!("destination {:?}", dest.peer_addr().unwrap().ip());
 
                     let ip = packet::ip::v4::Packet::new(&buffer).unwrap();
                     dbg!(ip);
 
                     dest.write(&buffer).unwrap();
-                    //csocket.write(&buffer, value).unwrap();
                 }
             } else {
                 println!("PACKET NOT IP");

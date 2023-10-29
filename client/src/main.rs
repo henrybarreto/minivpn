@@ -1,30 +1,19 @@
 use std::{
     env,
     io::{Read, Write},
-    net::{IpAddr, Ipv4Addr, SocketAddrV4, TcpStream, UdpSocket},
+    net::{Ipv4Addr, TcpStream},
     str::FromStr,
     sync::{Arc, Mutex},
     thread,
 };
 
-use bincode;
-use packet::{Builder, Packet};
-use serde::{Deserialize, Serialize};
-
 extern crate tun;
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct Identity {
-    pub network: u64,
-}
 
 fn main() {
     let mut config = tun::Configuration::default();
     let args: Vec<String> = env::args().collect();
 
-    println!("args: {:?}", args);
     config
-        // .address(Ipv4Addr::new(10, 0, 0, 100))
         .address(Ipv4Addr::from_str(&args[1]).unwrap())
         .netmask((255, 255, 255, 0))
         .up();
@@ -32,18 +21,16 @@ fn main() {
     let dev = tun::create(&config).unwrap();
     dev.set_nonblock().unwrap();
 
-    //let socket = UdpSocket::bind("0.0.0.0:8080").expect("couldn't bind to address");
     let address = &args[2];
     let socket = TcpStream::connect(address).expect("couldn't bind to address");
     socket
         .set_nonblocking(true)
         .expect("set_nonblocking call failed");
-    // socket.connect(address).expect("connect function failed");
 
     let mdev = Arc::new(Mutex::new(dev));
     let msocket = Arc::new(Mutex::new(socket));
 
-    let mut csocket = msocket.clone();
+    let csocket = msocket.clone();
     let cdev = mdev.clone();
     thread::spawn(move || loop {
         let mut buffer = [0; 4096];
@@ -82,7 +69,7 @@ fn main() {
         let mut buffer = [0; 4096];
         let read = match socket.read(&mut buffer) {
             Ok(read) => read,
-            Err(e) => {
+            Err(_) => {
                 continue;
             }
         };
