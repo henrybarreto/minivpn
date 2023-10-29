@@ -1,8 +1,7 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     io::{Read, Write},
-    net::{IpAddr, Ipv4Addr, SocketAddrV4, TcpListener, TcpStream, UdpSocket},
-    string,
+    net::{IpAddr, TcpListener, TcpStream},
     sync::{Arc, Mutex},
     thread,
 };
@@ -21,62 +20,36 @@ fn main() {
         thread::spawn(move || loop {
             let mut buffer = [0; 4096];
 
-            let mut l = csocket.lock().unwrap();
-            let read = l.read(&mut buffer).unwrap();
-            if read == 0 {
-                break;
-            }
-            println!(
-                "{:?} bytes received from {:?}",
-                read,
-                l.peer_addr().unwrap()
-            );
+            let mut socket = csocket.lock().unwrap();
+            let _ = match socket.read(&mut buffer) {
+                Ok(read) => {
+                    if read == 0 {
+                        break;
+                    }
+
+                    read
+                }
+                Err(_) => break,
+            };
 
             if let Ok(ip) = packet::ip::v4::Packet::new(&buffer) {
-                println!("PACKET IS IP");
+                let source: IpAddr = ip.source().into();
+                let destination: IpAddr = ip.destination().into();
 
-                let mut n = cnetworks.lock().unwrap();
-                dbg!(&n);
+                let mut networks = cnetworks.lock().unwrap();
+                dbg!(&networks);
 
-                let origin = n.get(&ip.source().into());
-                dbg!(&origin);
-
-                if let None = origin {
-                    println!("key {:?}", ip.source());
-                    println!("value {:?}", l.peer_addr().unwrap().ip());
-
-                    n.insert(ip.source().into(), l.try_clone().unwrap());
-
-                    println!(
-                        "inserted key {:?} and {:?}",
-                        l.peer_addr().unwrap().ip(),
-                        ip.source()
-                    );
+                if let None = networks.get(&ip.source().into()) {
+                    networks.insert(source, socket.try_clone().unwrap());
                 }
 
-                let peer = n.get(&ip.destination().into());
-
-                if let None = peer {
-                    println!("peer is none");
-                } else {
-                    println!("peer is some");
-                    let mut dest = peer.unwrap().try_clone().unwrap();
-
-                    println!(
-                        "already inseted the key {:?} with value {:?}",
-                        ip.source(),
-                        dest.peer_addr().unwrap().ip()
-                    );
-
-                    println!("destination {:?}", dest.peer_addr().unwrap().ip());
-
-                    let ip = packet::ip::v4::Packet::new(&buffer).unwrap();
-                    dbg!(ip);
+                if let Some(to) = networks.get(&destination) {
+                    let mut dest = to.try_clone().unwrap();
 
                     dest.write(&buffer).unwrap();
                 }
             } else {
-                println!("PACKET NOT IP");
+                dbg!("PACKET NOT IP");
             }
         });
     }
