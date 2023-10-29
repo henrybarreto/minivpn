@@ -13,8 +13,11 @@ fn main() {
     let mut config = tun::Configuration::default();
     let args: Vec<String> = env::args().collect();
 
+    let mut address = String::from_str("10.0.0.").unwrap();
+    address.push_str(&args[1]);
+
     config
-        .address(Ipv4Addr::from_str(&args[1]).unwrap())
+        .address(Ipv4Addr::from_str(&address).unwrap())
         .netmask((255, 255, 255, 0))
         .up();
 
@@ -45,30 +48,32 @@ fn main() {
         drop(dev);
 
         if let Ok(ip) = packet::ip::v4::Packet::new(&buffer[..read]) {
-            println!("PACKET IS IP");
-
-            println!("IP {:?}", ip);
             let mut socket = csocket.lock().unwrap();
-            dbg!(&socket);
             socket
                 .write(&buffer[..read])
                 .expect("couldn't send message");
             drop(socket);
 
-            println!("WROTE TO SOCKET");
+            dbg!(ip);
         } else {
-            println!("PACKET NOT IP");
+            dbg!("PACKET NOT IP");
         }
     });
 
     let csocket = msocket.clone();
     let cdev = mdev.clone();
     thread::spawn(move || loop {
-        let mut socket = csocket.lock().unwrap();
-
         let mut buffer = [0; 4096];
+
+        let mut socket = csocket.lock().unwrap();
         let read = match socket.read(&mut buffer) {
-            Ok(read) => read,
+            Ok(read) => {
+                if read == 0 {
+                    break;
+                }
+
+                read
+            }
             Err(_) => {
                 continue;
             }
@@ -76,23 +81,18 @@ fn main() {
         drop(socket);
 
         if let Ok(ip) = packet::ip::v4::Packet::new(&buffer[..read]) {
-            println!("PACKET IS IP");
-
             let mut dev = cdev.lock().unwrap();
             match dev.write(&buffer[..read]) {
-                Ok(usize) => {
-                    println!("WROTE TO DEV");
-                    println!("WROTE {:?} BYTES", usize);
+                Ok(_) => {
                     dbg!(ip);
                 }
-                Err(e) => {
-                    println!("ERROR WRITING TO DEV {:?}", e);
+                Err(_) => {
                     continue;
                 }
             }
             drop(dev);
         } else {
-            println!("PACKET NOT IP");
+            dbg!("PACKET NOT IP");
         }
     });
 

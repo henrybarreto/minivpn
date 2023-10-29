@@ -47,6 +47,8 @@ fn main() {
                     let mut dest = to.try_clone().unwrap();
 
                     dest.write(&buffer).unwrap();
+
+                    drop(networks);
                 }
             } else {
                 dbg!("PACKET NOT IP");
