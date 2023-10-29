@@ -32,12 +32,16 @@ fn main() {
     let dev = tun::create(&config).unwrap();
     dev.set_nonblock().unwrap();
 
-    let socket = UdpSocket::bind("0.0.0.0:8080").expect("couldn't bind to address");
+    //let socket = UdpSocket::bind("0.0.0.0:8080").expect("couldn't bind to address");
     let address = &args[2];
-    socket.connect(address).expect("connect function failed");
+    let socket = TcpStream::connect(address).expect("couldn't bind to address");
+    socket
+        .set_nonblocking(true)
+        .expect("set_nonblocking call failed");
+    // socket.connect(address).expect("connect function failed");
 
     let mdev = Arc::new(Mutex::new(dev));
-    let msocket = Arc::new(socket);
+    let msocket = Arc::new(Mutex::new(socket));
 
     let mut csocket = msocket.clone();
     let cdev = mdev.clone();
@@ -56,8 +60,14 @@ fn main() {
         if let Ok(ip) = packet::ip::v4::Packet::new(&buffer[..read]) {
             println!("PACKET IS IP");
 
-            let socket = &mut csocket;
-            socket.send(&buffer[..read]).expect("couldn't send message");
+            println!("IP {:?}", ip);
+            let mut socket = csocket.lock().unwrap();
+            dbg!(&socket);
+            socket
+                .write(&buffer[..read])
+                .expect("couldn't send message");
+            drop(socket);
+
             println!("WROTE TO SOCKET");
         } else {
             println!("PACKET NOT IP");
@@ -67,21 +77,16 @@ fn main() {
     let csocket = msocket.clone();
     let cdev = mdev.clone();
     thread::spawn(move || loop {
-        let socket = &csocket;
+        let mut socket = csocket.lock().unwrap();
 
         let mut buffer = [0; 4096];
-        dbg!("B");
-        let read = match socket.recv(&mut buffer) {
-            Ok(read) => {
-                dbg!("D");
-
-                read
-            }
-            Err(_) => {
+        let read = match socket.read(&mut buffer) {
+            Ok(read) => read,
+            Err(e) => {
                 continue;
             }
         };
-        dbg!("C");
+        drop(socket);
 
         if let Ok(ip) = packet::ip::v4::Packet::new(&buffer[..read]) {
             println!("PACKET IS IP");
@@ -108,57 +113,3 @@ fn main() {
         thread::sleep(std::time::Duration::from_secs(1));
     }
 }
-
-// let mut dev = cdev.lock().unwrap();
-// println!("WRITING TO DEV");
-// match dev.write_all(&response) {
-//     Ok(_) => {}
-//     Err(_) => {
-//         continue;
-//     }
-// }
-// println!("WROTE TO DEV");
-//drop(dev);
-// match ip.protocol() {
-//     packet::ip::Protocol::Udp => {
-//         let udp = packet::udp::Packet::new(ip.payload()).unwrap();
-
-//         println!("CREATING PACKET");
-//         let response = packet::ip::v4::Builder::default()
-//             .id(0x01)
-//             .unwrap()
-//             .ttl(64)
-//             .unwrap()
-//             .source(ip.source())
-//             .unwrap()
-//             .destination(ip.destination())
-//             .unwrap()
-//             .udp()
-//             .unwrap()
-//             .source(udp.source())
-//             .unwrap()
-//             .destination(udp.destination())
-//             .unwrap()
-//             .payload(udp.payload())
-//             .unwrap()
-//             .build()
-//             .unwrap();
-
-//         let mut dev = cdev.lock().unwrap();
-//         println!("WRITING TO DEV");
-//         match dev.write_all(&response) {
-//             Ok(_) => {}
-//             Err(_) => {
-//                 continue;
-//             }
-//         }
-//         println!("WROTE TO DEV");
-//         drop(dev);
-//     }
-//     packet::ip::Protocol::Tcp => {
-//         println!("PACKET TYPE TCP");
-//     }
-//     _ => {
-//         println!("PACKET TYPE NOT SUPPORTED");
-//     }
-// }
