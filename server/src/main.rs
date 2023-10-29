@@ -35,7 +35,9 @@ fn handle(mut socket: TcpStream, cnetworks: Arc<Mutex<HashMap<IpAddr, TcpStream>
                     Ok(mut dest) => {
                         dest.write(&buffer).unwrap();
                     }
-                    Err(_) => continue,
+                    Err(_) => {
+                        networks.remove(&destination);
+                    }
                 }
 
                 drop(networks);
