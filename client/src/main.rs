@@ -1,7 +1,7 @@
 use std::{
     env,
     io::{Read, Write},
-    net::{Ipv4Addr, TcpStream},
+    net::{IpAddr, Ipv4Addr, TcpStream},
     str::FromStr,
     sync::{Arc, Mutex},
     thread,
@@ -16,6 +16,8 @@ fn main() {
     let mut address = String::from_str("10.0.0.").unwrap();
     address.push_str(&args[1]);
 
+    let addr = IpAddr::from_str(&address).unwrap();
+
     config
         .address(Ipv4Addr::from_str(&address).unwrap())
         .netmask((255, 255, 255, 0))
@@ -25,10 +27,11 @@ fn main() {
     dev.set_nonblock().unwrap();
 
     let address = &args[2];
-    let socket = TcpStream::connect(address).expect("couldn't bind to address");
+    let mut socket = TcpStream::connect(address).expect("couldn't bind to address");
     socket
         .set_nonblocking(true)
         .expect("set_nonblocking call failed");
+    socket.write(&bincode::serialize(&addr).unwrap()).unwrap();
 
     let mdev = Arc::new(Mutex::new(dev));
     let msocket = Arc::new(Mutex::new(socket));
