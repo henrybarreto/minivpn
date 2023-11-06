@@ -4,6 +4,7 @@
 
 <h3 align="center">A simple VPN</h3>
 
+## Client
 ```mermaid
 sequenceDiagram
 participant interface
