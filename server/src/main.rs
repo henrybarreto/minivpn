@@ -10,6 +10,8 @@ use tokio::net::UdpSocket;
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
+
     let networks = HashMap::<IpAddr, SocketAddr>::new();
     let anetworks = Arc::new(Mutex::new(networks));
 

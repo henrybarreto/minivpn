@@ -1,6 +1,8 @@
 use clap::{Arg, Command};
 
 fn main() {
+    env_logger::init();
+
     let matches = Command::new("Orbit")
         .version(env!("CARGO_PKG_VERSION"))
         .about(env!("CARGO_PKG_DESCRIPTION"))
