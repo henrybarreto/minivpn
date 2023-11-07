@@ -5,6 +5,7 @@ use std::sync::Arc;
 use clap::{Arg, Command};
 use futures::StreamExt;
 use ipnet::Ipv4Net;
+use log::info;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::{net::UdpSocket, sync::Mutex};
 use tun::Device;
@@ -161,7 +162,7 @@ async fn connect(server: &str, port: &str) {
         }
     });
 
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
 
     let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
     let pinger = format!("{}:{}", server, "4444");
@@ -172,5 +173,7 @@ async fn connect(server: &str, port: &str) {
         if let Err(e) = socket.send_to(&buffer, &pinger).await {
             panic!("Failed to ping the server due {}", e);
         }
+
+        info!("Ping");
     }
 }

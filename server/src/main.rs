@@ -160,7 +160,7 @@ async fn main() {
                             //networks.remove(&destination);
                         }
 
-                        info!("Sent {} bytes to {} from {}", send, to, from);
+                        info!("Sent {} bytes from {} to {}", send, from, to);
                     }
                     Err(e) => {
                         error!("Error sending packet");
