@@ -1,19 +1,22 @@
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use ipnet::Ipv4Net;
 use packet::Builder;
-use tokio::net::UdpSocket;
+use tokio::{
+    net::UdpSocket,
+    sync::{Mutex, RwLock},
+};
 
 #[tokio::main]
 async fn main() {
     env_logger::init();
 
     let networks = HashMap::<IpAddr, SocketAddr>::new();
-    let anetworks = Arc::new(Mutex::new(networks));
+    let anetworks = Arc::new(RwLock::new(networks));
 
     let net = Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 24).unwrap();
 
@@ -38,7 +41,7 @@ async fn main() {
                 .await
                 .unwrap();
 
-            let mut networks = auth_networks.lock().unwrap();
+            let mut networks = auth_networks.write().await;
             networks.insert(peer.addr().into(), addr);
             drop(networks);
 
@@ -46,12 +49,17 @@ async fn main() {
         }
     });
 
-    let main_networks = anetworks.clone();
+    let networks = anetworks.clone();
+
     let socket = UdpSocket::bind("0.0.0.0:9807").await.unwrap();
+    let msocket = Arc::new(socket);
+
+    let csocket = msocket.clone();
     loop {
         dbg!("LOOP");
         let mut buffer = [0; 4096];
 
+        let socket = csocket.clone();
         let (read, addr) = match socket.recv_from(&mut buffer).await {
             Ok((read, addr)) => (read, addr),
             Err(_) => continue,
@@ -59,53 +67,61 @@ async fn main() {
 
         dbg!("After read");
 
-        if let Ok(ip) = packet::ip::v4::Packet::new(&buffer) {
-            dbg!("IP");
-            let source: IpAddr = ip.source().into();
-            let destination: IpAddr = ip.destination().into();
-            dbg!(source, destination);
+        let csocket = csocket.clone();
+        let cmains = networks.clone();
+        tokio::spawn(async move {
+            dbg!("Spawn");
+            let socket = csocket.clone();
 
-            let mut networks = main_networks.lock().unwrap();
-            dbg!(&networks);
+            if let Ok(ip) = packet::ip::v4::Packet::new(&buffer) {
+                dbg!("IP");
+                let source: IpAddr = ip.source().into();
+                let destination: IpAddr = ip.destination().into();
+                dbg!(source, destination);
 
-            let from = networks.get(&source);
-            if let Some(a) = from {
-                if a != &addr {
-                    dbg!("FROM NOT EQUAL");
-                    dbg!(a, &addr);
+                let mut networks = cmains.read().await;
+                dbg!(&networks);
+
+                let from = networks.get(&source);
+                if let Some(a) = from {
+                    if a != &addr {
+                        dbg!("FROM NOT EQUAL");
+                        dbg!(a, &addr);
+                        drop(networks);
+
+                        return;
+                    }
+                } else {
                     drop(networks);
+                    dbg!("FROM NOT FOUND");
 
-                    continue;
+                    return;
+                }
+
+                if let Some(to) = networks.get(&destination) {
+                    dbg!(&to);
+                    match socket.send_to(&buffer[..read], to).await {
+                        Ok(send) => {
+                            if send == 0 {
+                                dbg!("SEND 0");
+                                //networks.remove(&destination);
+                            }
+
+                            dbg!("Send");
+                        }
+                        Err(e) => {
+                            dbg!("ERROR", e);
+                            // When the destination is not reachable, remove it from the list.
+                            //networks.remove(&destination);
+                        }
+                    }
+
+                    drop(networks);
                 }
             } else {
-                drop(networks);
-                dbg!("FROM NOT FOUND");
-
-                continue;
+                dbg!("PACKET NOT IP");
             }
-
-            if let Some(to) = networks.get(&destination) {
-                dbg!(&to);
-                match socket.send_to(&buffer[..read], to).await {
-                    Ok(send) => {
-                        if send == 0 {
-                            dbg!("SEND 0");
-                            networks.remove(&destination);
-                        }
-
-                        dbg!("Send");
-                    }
-                    Err(e) => {
-                        dbg!("ERROR", e);
-                        // When the destination is not reachable, remove it from the list.
-                        networks.remove(&destination);
-                    }
-                }
-
-                drop(networks);
-            }
-        } else {
-            dbg!("PACKET NOT IP");
-        }
+        });
+        dbg!("done");
     }
 }
