@@ -161,14 +161,16 @@ async fn connect(server: &str, port: &str) {
         }
     });
 
-    let csocket = msocket.clone();
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
 
+    let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
+    let pinger = format!("{}:{}", server, "4444");
     loop {
         interval.tick().await;
 
-        let socket = csocket.clone();
         let buffer = [0; 1];
-        socket.send(&buffer).await.unwrap();
+        if let Err(e) = socket.send_to(&buffer, &pinger).await {
+            panic!("Failed to ping the server due {}", e);
+        }
     }
 }

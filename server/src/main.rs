@@ -26,6 +26,20 @@ async fn main() {
 
     // let net = Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 24).unwrap();
 
+    trace!("Spawning ping listener");
+    tokio::spawn(async move {
+        info!("Listening for pings on 4444");
+
+        let socket = UdpSocket::bind("0.0.0.0:4444").await.unwrap();
+        loop {
+            let mut buffer = [0; 1];
+
+            let (_, addr) = socket.recv_from(&mut buffer).await.unwrap();
+
+            info!("Ping received from {}", addr);
+        }
+    });
+
     let cnetworks = mnetworks.clone();
     trace!("Spawning peer listener");
     tokio::spawn(async move {
