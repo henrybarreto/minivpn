@@ -15,36 +15,6 @@ async fn main() {
 
     let net = Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 24).unwrap();
 
-    let ping_networks = anetworks.clone();
-    tokio::task::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
-
-        dbg!("PING");
-        loop {
-            interval.tick().await;
-
-            dbg!("PING LOOP");
-            let networks = ping_networks.lock().unwrap();
-            dbg!(&networks);
-            let n = networks.clone();
-            drop(networks);
-            dbg!("PING LOOP AFTER DROP");
-
-            tokio::spawn(async move {
-                dbg!("PING THREAD");
-                let n = n;
-                let values = n.values();
-                let buffer = [0; 1];
-
-                let socket = UdpSocket::bind("0.0.0.0:4444").await.unwrap();
-                for addr in values {
-                    dbg!("PING", addr);
-                    socket.send_to(&buffer, addr).await.unwrap();
-                }
-            });
-        }
-    });
-
     let auth_networks = anetworks.clone();
     tokio::spawn(async move {
         dbg!("AUTH");

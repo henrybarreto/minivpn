@@ -3,13 +3,10 @@ use std::io::{Read, Write};
 use std::sync::Arc;
 
 use clap::{Arg, Command};
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use ipnet::Ipv4Net;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::RwLock;
 use tokio::{net::UdpSocket, sync::Mutex};
-use tokio_util::codec::{BytesCodec, LinesCodec};
-use tokio_util::udp::UdpFramed;
 use tun::Device;
 
 extern crate tun;
@@ -83,7 +80,6 @@ async fn connect(server: &str, port: &str) {
 
     let cwriter = writer.clone();
     let csocket = msocket.clone();
-    // let crouter = router.clone();
     tokio::spawn(async move {
         println!("LOOP");
         loop {
@@ -132,32 +128,45 @@ async fn connect(server: &str, port: &str) {
 
     let creader = reader.clone();
     let csocket = msocket.clone();
-    loop {
-        let mut buffer = [0; 4096];
+    tokio::spawn(async move {
+        loop {
+            let mut buffer = [0; 4096];
 
-        let mut dev = creader.lock().await;
+            let mut dev = creader.lock().await;
 
-        let read = match dev.read(&mut buffer) {
-            Ok(read) => read,
-            Err(e) => {
-                drop(dev);
-                continue;
+            let read = match dev.read(&mut buffer) {
+                Ok(read) => read,
+                Err(e) => {
+                    drop(dev);
+                    continue;
+                }
+            };
+            dbg!(read);
+            drop(dev);
+
+            if let Ok(ip) = packet::ip::v4::Packet::new(&buffer[..read]) {
+                dbg!(ip);
+
+                let socket = csocket.clone();
+                if let Err(e) = socket.send(&buffer).await {
+                    dbg!(e);
+                }
+
+                dbg!("SENT PACKET FROM SOCKET");
+            } else {
+                dbg!("PACKET NOT IP");
             }
-        };
-        dbg!(read);
-        drop(dev);
-
-        if let Ok(ip) = packet::ip::v4::Packet::new(&buffer[..read]) {
-            dbg!(ip);
-
-            let socket = csocket.clone();
-            if let Err(e) = socket.send(&buffer).await {
-                dbg!(e);
-            }
-
-            dbg!("SENT PACKET FROM SOCKET");
-        } else {
-            dbg!("PACKET NOT IP");
         }
+    });
+
+    let csocket = msocket.clone();
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+
+    loop {
+        interval.tick().await;
+
+        let socket = csocket.clone();
+        let buffer = [0; 1];
+        socket.send(&buffer).await.unwrap();
     }
 }

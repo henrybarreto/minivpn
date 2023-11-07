@@ -516,6 +516,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "obirt"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "env_logger",
+ "log",
+ "packet",
+ "serde",
+ "toml",
+ "tun 0.6.1",
+]
+
+[[package]]
 name = "object"
 version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -529,19 +542,6 @@ name = "once_cell"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd8b5dd2ae5ed71462c540258bedcb51965123ad7e7ccf4b9a8cafaa4a63576d"
-
-[[package]]
-name = "orbit"
-version = "0.1.0"
-dependencies = [
- "clap",
- "env_logger",
- "log",
- "packet",
- "serde",
- "toml",
- "tun 0.6.1",
-]
 
 [[package]]
 name = "packet"
