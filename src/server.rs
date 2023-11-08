@@ -59,8 +59,27 @@ pub async fn serve() {
     info!("Listening for packets on 9807");
 
     let csocket = msocket.clone();
+
+    // process(read, addr, csocket, cnetworks).await;
+    tokio::join!(
+        worker(csocket.clone(), cnetworks.clone(), 0),
+        worker(csocket.clone(), cnetworks.clone(), 1),
+        worker(csocket.clone(), cnetworks.clone(), 2),
+        worker(csocket.clone(), cnetworks.clone(), 3),
+        worker(csocket.clone(), cnetworks.clone(), 4),
+        worker(csocket.clone(), cnetworks.clone(), 5),
+        worker(csocket.clone(), cnetworks.clone(), 6),
+        worker(csocket.clone(), cnetworks.clone(), 7),
+    );
+}
+
+async fn worker(
+    csocket: Arc<UdpSocket>,
+    cnetworks: Arc<RwLock<HashMap<Ipv4Addr, SocketAddr>>>,
+    id: u8,
+) {
     loop {
-        trace!("Packet router cycle");
+        trace!("Packet router cycle {}", id);
 
         let mut buffer = [0; 4096];
 
@@ -75,82 +94,82 @@ pub async fn serve() {
             }
         };
 
-        info!("Packet from {} reading {}", addr, read);
+        info!("Packet from {} reading {} on worker {}", addr, read, id);
 
         let csocket = csocket.clone();
         let cnetworks = cnetworks.clone();
-        tokio::spawn(async move {
-            trace!("Packet router spawn to dial {}", addr);
-            let socket = csocket.clone();
 
-            if let Ok(ip) = packet::ip::v4::Packet::new(&buffer) {
-                let source: Ipv4Addr = ip.source();
-                let destination: Ipv4Addr = ip.destination();
-                debug!("Packet is IP from {} to {}", source, destination);
+        trace!("Packet router spawn to dial {}", addr);
+        let socket = csocket.clone();
 
-                trace!("Lock for reading networks");
-                let networks = cnetworks.read().await;
-                dbg!(&networks);
+        if let Ok(ip) = packet::ip::v4::Packet::new(&buffer) {
+            let source: Ipv4Addr = ip.source();
+            let destination: Ipv4Addr = ip.destination();
+            debug!("Packet is IP from {} to {}", source, destination);
 
-                let m = networks.clone();
+            trace!("Lock for reading networks");
+            let networks = cnetworks.read().await;
+            dbg!(&networks);
 
-                drop(networks);
-                trace!("Done reading networks locking");
+            let m = networks.clone();
 
-                let w_from = m.get(&source);
-                if w_from.is_none() {
-                    error!("Packet source is not in networks");
-                    dbg!(&source);
+            drop(networks);
+            trace!("Done reading networks locking");
 
-                    return;
-                }
+            let w_from = m.get(&source);
+            if w_from.is_none() {
+                error!("Packet source is not in networks");
+                dbg!(&source);
 
-                debug!("Packet source is in networks {}", &source);
+                continue;
+            }
 
-                let from = w_from.unwrap();
-                if from.to_string() != addr.to_string() {
-                    error!("Packet source is not from the same address");
-                    dbg!(from, &addr);
+            debug!("Packet source is in networks {}", &source);
 
-                    return;
-                }
+            let from = w_from.unwrap();
+            if from.to_string() != addr.to_string() {
+                error!("Packet source is not from the same address");
+                dbg!(from, &addr);
 
-                debug!("Packet source is from the same address {}", &addr);
+                continue;
+            }
 
-                let w_to = m.get(&destination);
-                if w_to.is_none() {
-                    error!("Packet destination is not in networks");
-                    dbg!(&destination);
+            debug!("Packet source is from the same address {}", &addr);
 
-                    return;
-                }
+            let w_to = m.get(&destination);
+            if w_to.is_none() {
+                error!("Packet destination is not in networks");
+                dbg!(&destination);
 
-                debug!("Packet destination is in networks {}", &destination);
+                continue;
+            }
 
-                let to = w_to.unwrap();
-                dbg!(&to);
-                match socket.send_to(&buffer[..read], to).await {
-                    Ok(send) => {
-                        if send == 0 {
-                            error!("Nothing was sent");
-                            warn!("Removing {} from networks", &destination);
-                            //networks.remove(&destination);
-                        }
+            debug!("Packet destination is in networks {}", &destination);
 
-                        info!("Sent {} bytes from {} to {}", send, from, to);
-                    }
-                    Err(e) => {
-                        error!("Error sending packet");
-                        dbg!(e);
-                        // When the destination is not reachable, remove it from the list.
+            let to = w_to.unwrap();
+            dbg!(&to);
+            match socket.send_to(&buffer[..read], to).await {
+                Ok(send) => {
+                    if send == 0 {
+                        error!("Nothing was sent");
+                        warn!("Removing {} from networks", &destination);
                         //networks.remove(&destination);
                     }
-                }
-            } else {
-                warn!("Packet received from {} is not IP", addr);
-            }
-        });
 
-        debug!("Packet router cycle done {}", addr);
+                    info!(
+                        "Sent {} bytes from {} to {} on worker {}",
+                        send, from, to, id
+                    );
+                }
+                Err(e) => {
+                    error!("Error sending packet");
+                    dbg!(e);
+                    // When the destination is not reachable, remove it from the list.
+                    //networks.remove(&destination);
+                }
+            }
+        } else {
+            warn!("Packet received from {} is not IP", addr);
+        }
     }
 }
