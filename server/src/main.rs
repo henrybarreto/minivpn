@@ -1,16 +1,11 @@
-use std::{
-    collections::HashMap,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::Arc,
-};
-
 use ipnet::Ipv4Net;
 use log::{debug, error, info, trace, warn};
-use packet::Builder;
-use tokio::{
-    net::UdpSocket,
-    sync::{Mutex, RwLock},
+use std::{
+    collections::HashMap,
+    net::{Ipv4Addr, SocketAddr},
+    sync::Arc,
 };
+use tokio::{net::UdpSocket, sync::RwLock};
 
 #[tokio::main]
 async fn main() {

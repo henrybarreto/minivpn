@@ -1,20 +1,17 @@
+use clap::{Arg, Command};
+use ipnet::Ipv4Net;
+use log::{debug, error, info, trace};
 use std::env;
 use std::io::{Read, Write};
 use std::sync::Arc;
-
-use clap::{Arg, Command};
-use futures::StreamExt;
-use ipnet::Ipv4Net;
-use log::info;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::{net::UdpSocket, sync::Mutex};
-use tun::Device;
-
-extern crate tun;
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    env_logger::builder()
+        .filter_level(log::LevelFilter::Trace)
+        .parse_env("LOG")
+        .init();
 
     let matches = Command::new("Orbit")
         .version(env!("CARGO_PKG_VERSION"))
@@ -45,22 +42,32 @@ async fn main() {
 }
 
 async fn connect(server: &str, port: &str) {
+    info!("Obirt connecting to {}:{}", server, port);
+
     let mut config = tun::Configuration::default();
 
     let socket = UdpSocket::bind("0.0.0.0:1620")
         .await
         .expect("couldn't bind to address");
 
+    info!("Bound to 1620");
+
+    info!("Registering perr on the server");
     socket
         .send_to(&[0; 1], format!("{}:{}", server, "1120"))
         .await
         .unwrap();
 
+    debug!("Waiting for server to respond");
+
     let mut buf = [0; 4096];
     let (read, _) = socket.recv_from(&mut buf).await.unwrap();
 
+    info!("Received response from server {}", read);
+
     let me: Ipv4Net = bincode::deserialize(&buf[..read]).unwrap();
-    dbg!(&me);
+
+    info!("Peer registered as {}", me);
 
     config.address(me.addr()).netmask(me.netmask()).up();
     config.queues(2);
@@ -71,10 +78,14 @@ async fn connect(server: &str, port: &str) {
     let router = format!("{}:{}", server, port);
     dbg!(&router);
 
+    info!("Connecting to router");
+
     socket
         .connect(router)
         .await
         .expect("couldn't connect to address");
+
+    info!("Connected to router");
 
     let reader = Arc::new(Mutex::new(reader));
     let writer = Arc::new(Mutex::new(writer));
@@ -84,48 +95,36 @@ async fn connect(server: &str, port: &str) {
     let cwriter = writer.clone();
     let csocket = msocket.clone();
     tokio::spawn(async move {
-        println!("LOOP");
         loop {
-            println!("IN LOOP");
+            trace!("Receiving cycle");
+
             let mut buffer = [0; 4096];
 
             let socket = csocket.clone();
-            println!("WAITING FOR SOCKET BEFORE LOCK RECV");
-            let read = match socket.recv(&mut buffer).await {
-                Ok(read) => {
-                    if read == 0 {
-                        drop(socket);
 
-                        break;
-                    }
+            let recved = socket.recv(&mut buffer).await;
+            if let Err(e) = recved {
+                error!("Failed to receive packet due to {}", e);
 
-                    read
-                }
-                Err(e) => {
-                    dbg!(e);
-                    drop(socket);
+                continue;
+            }
 
-                    continue;
-                }
-            };
-            dbg!("RECEIVED PACKET");
-            dbg!(read);
-            drop(socket);
+            let read = recved.unwrap();
+            info!("Received {} bytes", read);
 
-            println!("WAITING FOR LOCK ON DEV TO WRITE");
             let mut dev = cwriter.lock().await;
-            println!("GOT LOCK ON DEV TO WRITE");
-            dbg!("WRITE");
+            let to_write = dev.write(&buffer[..read]);
+            if let Err(e) = to_write {
+                error!("Failed to write packet due to {}", e);
 
-            let wrote = match dev.write(&buffer) {
-                Ok(wrote) => wrote,
-                Err(e) => {
-                    drop(dev);
-                    continue;
-                }
-            };
-            dbg!(wrote);
+                drop(dev);
+                continue;
+            }
+
             drop(dev);
+
+            let wrote = to_write.unwrap();
+            info!("Wrote {} bytes", wrote);
         }
     });
 
@@ -133,44 +132,50 @@ async fn connect(server: &str, port: &str) {
     let csocket = msocket.clone();
     tokio::spawn(async move {
         loop {
+            trace!("Sending cycle");
+
             let mut buffer = [0; 4096];
 
             let mut dev = creader.lock().await;
+            let to_read = dev.read(&mut buffer);
+            if let Err(e) = to_read {
+                error!("Failed to read packet due to {}", e);
 
-            let read = match dev.read(&mut buffer) {
-                Ok(read) => read,
-                Err(e) => {
-                    drop(dev);
-                    continue;
-                }
-            };
-            dbg!(read);
+                drop(dev);
+                continue;
+            }
+
+            let read = to_read.unwrap();
+            info!("Read {} bytes", read);
             drop(dev);
 
-            if let Ok(ip) = packet::ip::v4::Packet::new(&buffer[..read]) {
-                dbg!(ip);
+            if let Ok(_) = packet::ip::v4::Packet::new(&buffer[..read]) {
+                debug!("Packet read from tun is IP");
 
                 let socket = csocket.clone();
-                if let Err(e) = socket.send(&buffer).await {
-                    dbg!(e);
+                let to_send = socket.send(&buffer[..read]).await;
+                if let Err(e) = &to_send {
+                    error!("Failed to send packet due to {}", e);
                 }
 
-                dbg!("SENT PACKET FROM SOCKET");
+                let sent = to_send.unwrap();
+
+                info!("Sent {} bytes", sent);
             } else {
-                dbg!("PACKET NOT IP");
+                debug!("Packet read from tun is not IP");
             }
         }
     });
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
 
-    let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
-    let pinger = format!("{}:{}", server, "4444");
+    let socket = msocket.clone();
     loop {
         interval.tick().await;
+        trace!("Pinging server");
 
-        let buffer = [0; 1];
-        if let Err(e) = socket.send_to(&buffer, &pinger).await {
+        let buffer = [0; 4096];
+        if let Err(e) = socket.send(&buffer).await {
             panic!("Failed to ping the server due {}", e);
         }
 
