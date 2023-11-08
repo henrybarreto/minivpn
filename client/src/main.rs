@@ -171,12 +171,13 @@ async fn connect(server: &str, port: &str) {
 
     let socket = msocket.clone();
     loop {
+        trace!("Waiting for ping interval");
         interval.tick().await;
-        trace!("Pinging server");
+        trace!("Ping time interval reached");
 
         let buffer = [0; 4096];
         if let Err(e) = socket.send(&buffer).await {
-            panic!("Failed to ping the server due {}", e);
+            error!("Failed to ping the server due {}", e);
         }
 
         info!("Ping");
