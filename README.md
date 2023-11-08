@@ -5,6 +5,7 @@
 <h3 align="center">A simple VPN</h3>
 
 ## Client
+
 ```mermaid
 sequenceDiagram
 participant interface
@@ -14,6 +15,11 @@ client ->>+ server: UPD connection
 server -->> client: IP and Mask to bind
 server ->> server: Store the client information in the server
 client ->>+ interface: Create network interface
+
+loop Keep alive
+    client ->> server: Send keep alive package
+end
+
 loop Every IP package
     par From Client
     interface ->> client: Receive the IP package
@@ -25,11 +31,11 @@ loop Every IP package
     client ->> interface: Send the IP package
     end
 end
+
 client ->> server: Close
 server ->>- client: Close
 client ->> interface: Close network interface
 interface ->>- client: Confrim close on network interface
-
 ```
 
 <p align="center">. . .</p>
