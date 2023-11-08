@@ -46,7 +46,7 @@ async fn connect(server: &str, port: &str) {
 
     let mut config = tun::Configuration::default();
 
-    let socket = UdpSocket::bind("0.0.0.0:1620")
+    let socket = UdpSocket::bind("0.0.0.0:0")
         .await
         .expect("couldn't bind to address");
 
