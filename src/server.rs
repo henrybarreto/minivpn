@@ -1,39 +1,21 @@
 use ipnet::Ipv4Net;
 use log::{debug, error, info, trace, warn};
+use std::io::{Read, Write};
 use std::{
     collections::HashMap,
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
 };
-use tokio::{net::UdpSocket, sync::RwLock};
+use tokio::net::UdpSocket;
+use tokio::sync::RwLock;
 
-#[tokio::main]
-async fn main() {
-    env_logger::builder()
-        .filter_level(log::LevelFilter::Trace)
-        .parse_env("LOG")
-        .init();
-
+pub async fn serve() {
     info!("Starting Orbit");
 
     let networks = HashMap::<Ipv4Addr, SocketAddr>::new();
     let mnetworks = Arc::new(RwLock::new(networks));
 
     // let net = Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 24).unwrap();
-
-    trace!("Spawning ping listener");
-    tokio::spawn(async move {
-        info!("Listening for pings on 4444");
-
-        let socket = UdpSocket::bind("0.0.0.0:4444").await.unwrap();
-        loop {
-            let mut buffer = [0; 1];
-
-            let (_, addr) = socket.recv_from(&mut buffer).await.unwrap();
-
-            info!("Ping received from {}", addr);
-        }
-    });
 
     let cnetworks = mnetworks.clone();
     trace!("Spawning peer listener");

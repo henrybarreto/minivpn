@@ -1,47 +1,11 @@
-use clap::{Arg, Command};
+use bincode;
 use ipnet::Ipv4Net;
 use log::{debug, error, info, trace};
-use std::env;
 use std::io::{Read, Write};
 use std::sync::Arc;
 use tokio::{net::UdpSocket, sync::Mutex};
 
-#[tokio::main]
-async fn main() {
-    env_logger::builder()
-        .filter_level(log::LevelFilter::Trace)
-        .parse_env("LOG")
-        .init();
-
-    let matches = Command::new("Orbit")
-        .version(env!("CARGO_PKG_VERSION"))
-        .about(env!("CARGO_PKG_DESCRIPTION"))
-        .author(env!("CARGO_PKG_AUTHORS"))
-        .arg(
-            Arg::new("address")
-                .long("address")
-                .short('a')
-                .help("Server address")
-                .value_name("ADDRESS")
-                .required(true),
-        )
-        .arg(
-            Arg::new("port")
-                .long("port")
-                .short('p')
-                .help("Server port")
-                .value_name("PORT")
-                .default_value("9807"),
-        )
-        .get_matches();
-
-    let server = matches.get_one::<String>("address").unwrap();
-    let port = matches.get_one::<String>("port").unwrap();
-
-    connect(server, port).await;
-}
-
-async fn connect(server: &str, port: &str) {
+pub async fn connect(server: &str, port: &str, interface: &str) {
     info!("Obirt connecting to {}:{}", server, port);
 
     let mut config = tun::Configuration::default();
@@ -52,25 +16,38 @@ async fn connect(server: &str, port: &str) {
 
     info!("Bound to 1620");
 
+    // let peer = Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 100), 24).unwrap();
     info!("Registering perr on the server");
+
     socket
-        .send_to(&[0; 1], format!("{}:{}", server, "1120"))
+        .send_to(
+            &bincode::serialize(&[0; 1]).unwrap(),
+            format!("{}:{}", server, "1120"),
+        )
         .await
         .unwrap();
 
     debug!("Waiting for server to respond");
 
-    let mut buf = [0; 4096];
+    let mut buf = [0; 1024];
     let (read, _) = socket.recv_from(&mut buf).await.unwrap();
 
     info!("Received response from server {}", read);
 
-    let me: Ipv4Net = bincode::deserialize(&buf[..read]).unwrap();
+    let to_peer = bincode::deserialize(&buf[..read]);
+    let peer: Ipv4Net = match to_peer {
+        Ok(me) => me,
+        Err(e) => {
+            error!("Error deserializing peer due {}", e);
+            return;
+        }
+    };
 
-    info!("Peer registered as {}", me);
+    info!("Peer registered as {}", peer);
 
-    config.address(me.addr()).netmask(me.netmask()).up();
+    config.address(peer.addr()).netmask(peer.netmask()).up();
     config.queues(2);
+    config.name(interface);
 
     let dev = tun::create(&config).unwrap();
     let (reader, writer) = dev.split();

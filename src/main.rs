@@ -1,14 +1,21 @@
 use clap::{Arg, Command};
 
-fn main() {
-    env_logger::init();
+mod client;
+mod server;
 
-    let matches = Command::new("Orbit")
+#[tokio::main]
+async fn main() {
+    env_logger::builder()
+        .filter_level(log::LevelFilter::Trace)
+        .parse_env("LOG")
+        .init();
+
+    let matches = Command::new("Obirt")
         .version(env!("CARGO_PKG_VERSION"))
         .about(env!("CARGO_PKG_DESCRIPTION"))
         .author(env!("CARGO_PKG_AUTHORS"))
         .subcommand(
-            Command::new("connect")
+            Command::new("client")
                 .about("Connect to a server")
                 .arg(
                     Arg::new("address")
@@ -31,13 +38,28 @@ fn main() {
                         .short('i')
                         .help("Interface name")
                         .value_name("INTERFACE")
-                        .default_value("orb0"),
+                        .default_value("obr0"),
                 ),
         )
-        // info
+        .subcommand(Command::new("server").about("Start a server"))
         .subcommand(Command::new("info").about("Show information about the connection"))
         .get_matches();
 
+    match matches.subcommand() {
+        Some(("client", command)) => {
+            let server = command.get_one::<String>("address").unwrap();
+            let port = command.get_one::<String>("port").unwrap();
+            let interface = command.get_one::<String>("interface").unwrap();
+
+            client::connect(server, port, interface).await;
+        }
+        Some(("server", command)) => {
+            server::serve().await;
+        }
+        _ => {
+            println!("No subcommand was used");
+        }
+    }
     // Retrieve values of address and port arguments
     // let address = matches.value_source("address").unwrap();
     // let port = matches.value_source("port").unwrap();
