@@ -18,7 +18,7 @@ pub async fn serve() {
     let priv_key = RsaPrivateKey::new(&mut rng, bits).expect("failed to generate a key");
     let pub_key = RsaPublicKey::from(&priv_key);
 
-    let networks = HashMap::<Ipv4Addr, SocketAddr>::new();
+    let networks = HashMap::<Ipv4Addr, (SocketAddr, RsaPublicKey)>::new();
     let mnetworks = Arc::new(RwLock::new(networks));
 
     // let net = Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 24).unwrap();
@@ -46,6 +46,22 @@ pub async fn serve() {
 
             info!("Received peer request from {} with MAC {}", addr, mac);
 
+            info!("Requesting public key from {}", addr);
+
+            let (read, addr) = match socket.recv_from(&mut buffer).await {
+                Ok((read, addr)) => (read, addr),
+                Err(_) => continue,
+            };
+
+            info!("Received public key from {}", addr);
+
+            let peer_key = match bincode::deserialize::<RsaPublicKey>(&buffer[..read]) {
+                Ok(key) => key,
+                Err(_) => continue,
+            };
+
+            info!("Received public key from {}", addr);
+
             info!("Sending public key to {}", addr);
             socket
                 .send_to(&bincode::serialize(&pub_key.clone()).unwrap(), addr)
@@ -63,7 +79,7 @@ pub async fn serve() {
                 .unwrap();
 
             let mut networks = cnetworks.write().await;
-            networks.insert(peer.addr(), addr);
+            networks.insert(peer.addr(), (addr, peer_key));
             drop(networks);
 
             info!("Added peer: {} as {}", addr, peer.addr());
@@ -97,7 +113,7 @@ pub async fn serve() {
 async fn worker(
     id: u8,
     csocket: Arc<UdpSocket>,
-    cnetworks: Arc<RwLock<HashMap<Ipv4Addr, SocketAddr>>>,
+    cnetworks: Arc<RwLock<HashMap<Ipv4Addr, (SocketAddr, RsaPublicKey)>>>,
     priv_key: RsaPrivateKey,
 ) {
     loop {
@@ -150,7 +166,6 @@ async fn worker(
 
             trace!("Lock for reading networks");
             let networks = cnetworks.read().await;
-            // dbg!(&networks);
 
             let m = networks.clone();
 
@@ -168,7 +183,7 @@ async fn worker(
             debug!("Packet source is in networks {}", &source);
 
             let from = w_from.unwrap();
-            if from.to_string() != addr.to_string() {
+            if from.0.to_string() != addr.to_string() {
                 error!("Packet source is not from the same address");
                 dbg!(from, &addr);
 
@@ -188,8 +203,39 @@ async fn worker(
             debug!("Packet destination is in networks {}", &destination);
 
             let to = w_to.unwrap();
-            // dbg!(&to);
-            match socket.send_to(&packet[..packet.len()], to).await {
+            // match socket.send_to(&packet[..packet.len()], to.0).await {
+            //     Ok(send) => {
+            //         if send == 0 {
+            //             error!("Nothing was sent");
+            //             warn!("Removing {} from networks", &destination);
+            //             //networks.remove(&destination);
+            //         }
+
+            //         info!(
+            //             "Sent {} bytes from {} to {} on worker {}",
+            //             send, source, destination, id
+            //         );
+            //     }
+            //     Err(e) => {
+            //         error!("Error sending packet");
+            //         dbg!(e);
+            //         // When the destination is not reachable, remove it from the list.
+            //         //networks.remove(&destination);
+            //     }
+            // }
+
+            let mut data: Vec<u8> = Vec::new();
+            let chunks = packet[..packet.len()].chunks(128);
+            for chunk in chunks {
+                let mut rng = rand::thread_rng();
+                let mut enc =
+                    to.1.encrypt(&mut rng, Pkcs1v15Encrypt, &chunk[..chunk.len()])
+                        .unwrap();
+
+                data.append(&mut enc);
+            }
+
+            match socket.send_to(&data[..data.len()], to.0).await {
                 Ok(send) => {
                     if send == 0 {
                         error!("Nothing was sent");

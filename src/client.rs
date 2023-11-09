@@ -1,7 +1,7 @@
 use bincode;
 use ipnet::Ipv4Net;
 use log::{debug, error, info, trace};
-use rsa::Pkcs1v15Encrypt;
+use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
 use std::io::{Read, Write};
 use std::sync::Arc;
 use tokio::{net::UdpSocket, sync::Mutex};
@@ -18,6 +18,7 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
 
     info!("Registering peer on the server");
 
+    info!("Sending MAC address to server");
     let mac = mac_address::get_mac_address().unwrap();
     // TODO: send a identity to server identify the peer and bind it to a address.
     // TODO: validate errors.
@@ -28,6 +29,25 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
         )
         .await
         .unwrap();
+
+    info!("Sent MAC address to server");
+
+    info!("Generating key pair");
+    let mut rng = rand::thread_rng();
+    let bits = 2048;
+    let priv_key = RsaPrivateKey::new(&mut rng, bits).expect("failed to generate a key");
+    let pub_key = RsaPublicKey::from(&priv_key);
+    info!("Generated key pair");
+
+    info!("Sending public key to server");
+    socket
+        .send_to(
+            &bincode::serialize(&pub_key).unwrap(),
+            format!("{}:{}", server, "1120"),
+        )
+        .await
+        .unwrap();
+    info!("Sent public key to server");
 
     trace!("Waiting for server public key");
 
@@ -92,10 +112,10 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
     let csocket = msocket.clone();
     tokio::spawn(async move {
         tokio::join!(
-            input(0, cwriter.clone(), csocket.clone()),
-            input(1, cwriter.clone(), csocket.clone()),
-            input(2, cwriter.clone(), csocket.clone()),
-            input(3, cwriter.clone(), csocket.clone())
+            input(0, cwriter.clone(), csocket.clone(), priv_key.clone()),
+            input(1, cwriter.clone(), csocket.clone(), priv_key.clone()),
+            input(2, cwriter.clone(), csocket.clone(), priv_key.clone()),
+            input(3, cwriter.clone(), csocket.clone(), priv_key.clone())
         );
     });
 
@@ -126,7 +146,12 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
         info!("Ping");
     }
 }
-async fn input(id: usize, cwriter: Arc<Mutex<Writer>>, csocket: Arc<UdpSocket>) {
+async fn input(
+    id: usize,
+    cwriter: Arc<Mutex<Writer>>,
+    csocket: Arc<UdpSocket>,
+    private_key: RsaPrivateKey,
+) {
     loop {
         trace!("Receiving cycle {}", id);
 
@@ -143,25 +168,45 @@ async fn input(id: usize, cwriter: Arc<Mutex<Writer>>, csocket: Arc<UdpSocket>) 
             }
         };
 
-        if let Ok(ip) = packet::ip::v4::Packet::new(&buffer[..read]) {
+        info!("Received {} bytes using {}", read, id);
+
+        let mut packet: Vec<u8> = Vec::new();
+        let chunks = buffer[..read].chunks(256);
+        for chunk in chunks {
+            let mut p = match private_key.decrypt(Pkcs1v15Encrypt, &chunk[..chunk.len()]) {
+                Ok(e) => e,
+                Err(e) => {
+                    error!("Error decrypting packet");
+                    // dbg!(&buffer[..read]);
+                    // dbg!(read);
+                    dbg!(e);
+
+                    continue;
+                }
+            };
+
+            packet.append(&mut p);
+        }
+
+        if let Ok(ip) = packet::ip::v4::Packet::new(&packet[..packet.len()]) {
             dbg!(ip);
+
+            let mut interface = cwriter.lock().await;
+            let to_write = interface.write(&packet[..packet.len()]);
+            if let Err(e) = to_write {
+                error!("Failed to write packet due to {}", e);
+
+                drop(interface);
+                continue;
+            }
+
+            drop(interface);
+
+            let wrote = to_write.unwrap();
+            info!("Wrote {} bytes using {}", wrote, id);
         } else {
             info!("Packet read from socket is not IP");
         }
-
-        let mut interface = cwriter.lock().await;
-        let to_write = interface.write(&buffer[..read]);
-        if let Err(e) = to_write {
-            error!("Failed to write packet due to {}", e);
-
-            drop(interface);
-            continue;
-        }
-
-        drop(interface);
-
-        let wrote = to_write.unwrap();
-        info!("Wrote {} bytes using {}", wrote, id);
     }
 }
 
