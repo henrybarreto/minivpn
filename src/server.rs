@@ -60,23 +60,22 @@ pub async fn serve() {
 
     let csocket = msocket.clone();
 
-    // process(read, addr, csocket, cnetworks).await;
     tokio::join!(
-        worker(csocket.clone(), cnetworks.clone(), 0),
-        worker(csocket.clone(), cnetworks.clone(), 1),
-        worker(csocket.clone(), cnetworks.clone(), 2),
-        worker(csocket.clone(), cnetworks.clone(), 3),
-        worker(csocket.clone(), cnetworks.clone(), 4),
-        worker(csocket.clone(), cnetworks.clone(), 5),
-        worker(csocket.clone(), cnetworks.clone(), 6),
-        worker(csocket.clone(), cnetworks.clone(), 7),
+        worker(0, csocket.clone(), cnetworks.clone()),
+        worker(1, csocket.clone(), cnetworks.clone()),
+        worker(2, csocket.clone(), cnetworks.clone()),
+        worker(3, csocket.clone(), cnetworks.clone()),
+        worker(4, csocket.clone(), cnetworks.clone()),
+        worker(5, csocket.clone(), cnetworks.clone()),
+        worker(6, csocket.clone(), cnetworks.clone()),
+        worker(7, csocket.clone(), cnetworks.clone()),
     );
 }
 
 async fn worker(
+    id: u8,
     csocket: Arc<UdpSocket>,
     cnetworks: Arc<RwLock<HashMap<Ipv4Addr, SocketAddr>>>,
-    id: u8,
 ) {
     loop {
         trace!("Packet router cycle {}", id);

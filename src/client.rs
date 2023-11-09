@@ -4,21 +4,21 @@ use log::{debug, error, info, trace};
 use std::io::{Read, Write};
 use std::sync::Arc;
 use tokio::{net::UdpSocket, sync::Mutex};
+use tun::platform::posix::{Reader, Writer};
 
 pub async fn connect(server: &str, port: &str, interface: &str) {
     info!("Obirt connecting to {}:{}", server, port);
 
-    let mut config = tun::Configuration::default();
+    let socket = if let Ok(socket) = UdpSocket::bind("0.0.0.0:0").await {
+        socket
+    } else {
+        panic!("Failed to bind");
+    };
 
-    let socket = UdpSocket::bind("0.0.0.0:0")
-        .await
-        .expect("couldn't bind to address");
+    info!("Registering peer on the server");
 
-    info!("Bound to 1620");
-
-    // let peer = Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 100), 24).unwrap();
-    info!("Registering perr on the server");
-
+    // TODO: send a identity to server identify the peer and bind it to a address.
+    // TODO: validate errors.
     socket
         .send_to(
             &bincode::serialize(&[0; 1]).unwrap(),
@@ -29,13 +29,14 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
 
     debug!("Waiting for server to respond");
 
+    // TODO: validate errors.
     let mut buf = [0; 1024];
     let (read, _) = socket.recv_from(&mut buf).await.unwrap();
 
     info!("Received response from server {}", read);
 
-    let to_peer = bincode::deserialize(&buf[..read]);
-    let peer: Ipv4Net = match to_peer {
+    let bytes = bincode::deserialize(&buf[..read]);
+    let peer: Ipv4Net = match bytes {
         Ok(me) => me,
         Err(e) => {
             error!("Error deserializing peer due {}", e);
@@ -45,103 +46,53 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
 
     info!("Peer registered as {}", peer);
 
-    config.address(peer.addr()).netmask(peer.netmask()).up();
-    config.queues(2);
-    config.name(interface);
+    let mut config = tun::Configuration::default();
+    config
+        .name(interface)
+        .address(peer.addr())
+        .netmask(peer.netmask())
+        .queues(2)
+        .up();
 
-    let dev = tun::create(&config).unwrap();
-    let (reader, writer) = dev.split();
+    let interface = tun::create(&config).unwrap();
+
+    let (reader, writer) = interface.split();
+    let reader = Arc::new(Mutex::new(reader));
+    let writer = Arc::new(Mutex::new(writer));
 
     let router = format!("{}:{}", server, port);
     dbg!(&router);
 
     info!("Connecting to router");
 
-    socket
-        .connect(router)
-        .await
-        .expect("couldn't connect to address");
+    if let Err(e) = socket.connect(router).await {
+        panic!("Failed to connect to router due {}", e);
+    }
 
     info!("Connected to router");
-
-    let reader = Arc::new(Mutex::new(reader));
-    let writer = Arc::new(Mutex::new(writer));
 
     let msocket = Arc::new(socket);
 
     let cwriter = writer.clone();
     let csocket = msocket.clone();
     tokio::spawn(async move {
-        loop {
-            trace!("Receiving cycle");
-
-            let mut buffer = [0; 4096];
-
-            let socket = csocket.clone();
-
-            let recved = socket.recv(&mut buffer).await;
-            if let Err(e) = recved {
-                error!("Failed to receive packet due to {}", e);
-
-                continue;
-            }
-
-            let read = recved.unwrap();
-            info!("Received {} bytes", read);
-
-            let mut dev = cwriter.lock().await;
-            let to_write = dev.write(&buffer[..read]);
-            if let Err(e) = to_write {
-                error!("Failed to write packet due to {}", e);
-
-                drop(dev);
-                continue;
-            }
-
-            drop(dev);
-
-            let wrote = to_write.unwrap();
-            info!("Wrote {} bytes", wrote);
-        }
+        tokio::join!(
+            input(0, cwriter.clone(), csocket.clone()),
+            input(1, cwriter.clone(), csocket.clone()),
+            input(2, cwriter.clone(), csocket.clone()),
+            input(3, cwriter.clone(), csocket.clone())
+        );
     });
 
     let creader = reader.clone();
     let csocket = msocket.clone();
     tokio::spawn(async move {
-        loop {
-            trace!("Sending cycle");
-
-            let mut buffer = [0; 4096];
-
-            let mut dev = creader.lock().await;
-            let to_read = dev.read(&mut buffer);
-            if let Err(e) = to_read {
-                error!("Failed to read packet due to {}", e);
-
-                drop(dev);
-                continue;
-            }
-
-            let read = to_read.unwrap();
-            info!("Read {} bytes", read);
-            drop(dev);
-
-            if let Ok(_) = packet::ip::v4::Packet::new(&buffer[..read]) {
-                debug!("Packet read from tun is IP");
-
-                let socket = csocket.clone();
-                let to_send = socket.send(&buffer[..read]).await;
-                if let Err(e) = &to_send {
-                    error!("Failed to send packet due to {}", e);
-                }
-
-                let sent = to_send.unwrap();
-
-                info!("Sent {} bytes", sent);
-            } else {
-                debug!("Packet read from tun is not IP");
-            }
-        }
+        tokio::join!(
+            output(0, creader.clone(), csocket.clone()),
+            output(1, creader.clone(), csocket.clone()),
+            output(2, creader.clone(), csocket.clone()),
+            output(3, creader.clone(), csocket.clone())
+        );
     });
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
@@ -158,5 +109,74 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
         }
 
         info!("Ping");
+    }
+}
+async fn input(id: usize, cwriter: Arc<Mutex<Writer>>, csocket: Arc<UdpSocket>) {
+    loop {
+        trace!("Receiving cycle {}", id);
+
+        let mut buffer = [0; 4096];
+
+        let socket = csocket.clone();
+        let recved = socket.recv(&mut buffer).await;
+        let read = match recved {
+            Ok(read) => read,
+            Err(e) => {
+                error!("Failed to receive packet due to {}", e);
+
+                continue;
+            }
+        };
+
+        let mut interface = cwriter.lock().await;
+        let to_write = interface.write(&buffer[..read]);
+        if let Err(e) = to_write {
+            error!("Failed to write packet due to {}", e);
+
+            drop(interface);
+            continue;
+        }
+
+        drop(interface);
+
+        let wrote = to_write.unwrap();
+        info!("Wrote {} bytes using {}", wrote, id);
+    }
+}
+
+async fn output(id: usize, creader: Arc<Mutex<Reader>>, csocket: Arc<UdpSocket>) {
+    loop {
+        trace!("Sending cycle {}", id);
+
+        let mut buffer = [0; 4096];
+
+        let mut interface = creader.lock().await;
+        let read = match interface.read(&mut buffer) {
+            Ok(read) => read,
+            Err(e) => {
+                error!("Failed to read packet due to {}", e);
+
+                drop(interface);
+                continue;
+            }
+        };
+
+        if let Ok(_) = packet::ip::v4::Packet::new(&buffer[..read]) {
+            debug!("Packet read from tun is IP");
+
+            let socket = csocket.clone();
+            let sent = match socket.send(&buffer[..read]).await {
+                Ok(read) => read,
+                Err(e) => {
+                    error!("Failed to send packet due to {}", e);
+
+                    continue;
+                }
+            };
+
+            info!("Sent {} bytes using {}", sent, id);
+        } else {
+            debug!("Packet read from tun is not IP");
+        }
     }
 }
