@@ -41,7 +41,11 @@ pub async fn serve() {
 
             let mac = match bincode::deserialize::<mac_address::MacAddress>(&buffer[..read]) {
                 Ok(mac) => mac,
-                Err(_) => continue,
+                Err(e) => {
+                    error!("Error deserializing MAC address");
+
+                    continue;
+                }
             };
 
             info!("Received peer request from {} with MAC {}", addr, mac);

@@ -27,9 +27,12 @@ sequenceDiagram
 participant interface
 participant client
 participant server
-client ->>+ server: UPD connection
-server -->> client: IP and Mask to bind
+client ->>+ server: Send Mac address
+client ->> client: Generate key pair
+client ->> server: Send peer Public Key
+server -->> client: Send server Public Key
 server ->> server: Store the client information in the server
+server -->> client: Send IP and Mask to bind
 client ->>+ interface: Create network interface
 
 loop Keep alive
@@ -39,11 +42,13 @@ end
 loop Every IP package
     par From Client
     interface ->> client: Receive the IP package
-    client ->> server: Send the IP package to server through TCP
+    client ->> client: Encrypt the package
+    client ->> server: Send the IP package to server
     server ->> server: Look for the package's destination and sent it
     end
     par From Server
     server ->> client: Send the IP package to client
+    client ->> client: Decrypt the package
     client ->> interface: Send the IP package
     end
 end
@@ -57,6 +62,5 @@ interface ->>- client: Confrim close on network interface
 ## The Server
 
 The server receives all IP packages from the peers connected, and redirect it to the destination registed on it.
-
 
 <p align="center">. . .</p>
