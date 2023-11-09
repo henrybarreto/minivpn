@@ -1,6 +1,7 @@
 use bincode;
 use ipnet::Ipv4Net;
 use log::{debug, error, info, trace};
+use rsa::Pkcs1v15Encrypt;
 use std::io::{Read, Write};
 use std::sync::Arc;
 use tokio::{net::UdpSocket, sync::Mutex};
@@ -17,20 +18,34 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
 
     info!("Registering peer on the server");
 
+    let mac = mac_address::get_mac_address().unwrap();
     // TODO: send a identity to server identify the peer and bind it to a address.
     // TODO: validate errors.
     socket
         .send_to(
-            &bincode::serialize(&[0; 1]).unwrap(),
+            &bincode::serialize(&mac.unwrap()).unwrap(),
             format!("{}:{}", server, "1120"),
         )
         .await
         .unwrap();
 
-    debug!("Waiting for server to respond");
+    trace!("Waiting for server public key");
+
+    let mut buf = [0; 4096];
+    let (read, _) = socket.recv_from(&mut buf).await.unwrap();
+
+    let bytes = bincode::deserialize(&buf[..read]);
+    let pub_key: rsa::RsaPublicKey = match bytes {
+        Ok(me) => me,
+        Err(e) => {
+            error!("Error deserializing server public key due {}", e);
+            return;
+        }
+    };
+
+    trace!("Received server public key");
 
     // TODO: validate errors.
-    let mut buf = [0; 1024];
     let (read, _) = socket.recv_from(&mut buf).await.unwrap();
 
     info!("Received response from server {}", read);
@@ -88,10 +103,10 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
     let csocket = msocket.clone();
     tokio::spawn(async move {
         tokio::join!(
-            output(0, creader.clone(), csocket.clone()),
-            output(1, creader.clone(), csocket.clone()),
-            output(2, creader.clone(), csocket.clone()),
-            output(3, creader.clone(), csocket.clone())
+            output(0, creader.clone(), csocket.clone(), pub_key.clone()),
+            output(1, creader.clone(), csocket.clone(), pub_key.clone()),
+            output(2, creader.clone(), csocket.clone(), pub_key.clone()),
+            output(3, creader.clone(), csocket.clone(), pub_key.clone())
         );
     });
 
@@ -115,7 +130,7 @@ async fn input(id: usize, cwriter: Arc<Mutex<Writer>>, csocket: Arc<UdpSocket>) 
     loop {
         trace!("Receiving cycle {}", id);
 
-        let mut buffer = [0; 4096];
+        let mut buffer: Vec<u8> = vec![0; 4096];
 
         let socket = csocket.clone();
         let recved = socket.recv(&mut buffer).await;
@@ -127,6 +142,12 @@ async fn input(id: usize, cwriter: Arc<Mutex<Writer>>, csocket: Arc<UdpSocket>) 
                 continue;
             }
         };
+
+        if let Ok(ip) = packet::ip::v4::Packet::new(&buffer[..read]) {
+            dbg!(ip);
+        } else {
+            info!("Packet read from socket is not IP");
+        }
 
         let mut interface = cwriter.lock().await;
         let to_write = interface.write(&buffer[..read]);
@@ -144,11 +165,16 @@ async fn input(id: usize, cwriter: Arc<Mutex<Writer>>, csocket: Arc<UdpSocket>) 
     }
 }
 
-async fn output(id: usize, creader: Arc<Mutex<Reader>>, csocket: Arc<UdpSocket>) {
+async fn output(
+    id: usize,
+    creader: Arc<Mutex<Reader>>,
+    csocket: Arc<UdpSocket>,
+    pub_key: rsa::RsaPublicKey,
+) {
     loop {
         trace!("Sending cycle {}", id);
 
-        let mut buffer = [0; 4096];
+        let mut buffer: Vec<u8> = vec![0; 4096];
 
         let mut interface = creader.lock().await;
         let read = match interface.read(&mut buffer) {
@@ -161,12 +187,30 @@ async fn output(id: usize, creader: Arc<Mutex<Reader>>, csocket: Arc<UdpSocket>)
             }
         };
 
+        info!("Read {} bytes using {}", read, id);
+
+        // chuncks of 128 bytes
         if let Ok(_) = packet::ip::v4::Packet::new(&buffer[..read]) {
             debug!("Packet read from tun is IP");
 
+            let mut data: Vec<u8> = Vec::new();
+
+            let chunks = buffer[..read].chunks(128);
+            for chunk in chunks {
+                let mut rng = rand::thread_rng();
+                let mut enc = pub_key
+                    .encrypt(&mut rng, Pkcs1v15Encrypt, &chunk[..chunk.len()])
+                    .unwrap();
+
+                data.append(&mut enc);
+            }
+
             let socket = csocket.clone();
-            let sent = match socket.send(&buffer[..read]).await {
-                Ok(read) => read,
+            let sent = match socket.send(&data[..data.len()]).await {
+                Ok(sent) => {
+                    dbg!(sent);
+                    sent
+                }
                 Err(e) => {
                     error!("Failed to send packet due to {}", e);
 

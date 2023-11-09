@@ -1,5 +1,6 @@
 use ipnet::Ipv4Net;
 use log::{debug, error, info, trace, warn};
+use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
 use std::io::{Read, Write};
 use std::{
     collections::HashMap,
@@ -10,7 +11,12 @@ use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 
 pub async fn serve() {
-    info!("Starting Orbit");
+    info!("Starting Obirt");
+
+    let mut rng = rand::thread_rng();
+    let bits = 2048;
+    let priv_key = RsaPrivateKey::new(&mut rng, bits).expect("failed to generate a key");
+    let pub_key = RsaPublicKey::from(&priv_key);
 
     let networks = HashMap::<Ipv4Addr, SocketAddr>::new();
     let mnetworks = Arc::new(RwLock::new(networks));
@@ -26,16 +32,31 @@ pub async fn serve() {
 
         let socket = UdpSocket::bind("0.0.0.0:1120").await.unwrap();
         loop {
-            let mut buffer = [0; 1];
+            let mut buffer = [0; 1024];
 
-            let (_, addr) = match socket.recv_from(&mut buffer).await {
+            let (read, addr) = match socket.recv_from(&mut buffer).await {
                 Ok((read, addr)) => (read, addr),
                 Err(_) => continue,
             };
 
-            info!("Received peer request from {}", addr);
+            let mac = match bincode::deserialize::<mac_address::MacAddress>(&buffer[..read]) {
+                Ok(mac) => mac,
+                Err(_) => continue,
+            };
+
+            info!("Received peer request from {} with MAC {}", addr, mac);
+
+            info!("Sending public key to {}", addr);
+            socket
+                .send_to(&bincode::serialize(&pub_key.clone()).unwrap(), addr)
+                .await
+                .unwrap();
+
+            // ---
 
             let peer = Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 100 + counter), 24).unwrap();
+            info!("Sending peer address to {}", addr);
+
             socket
                 .send_to(&bincode::serialize(&peer).unwrap(), addr)
                 .await
@@ -57,18 +78,19 @@ pub async fn serve() {
     let msocket = Arc::new(socket);
 
     info!("Listening for packets on 9807");
+    info!("Ready to route packets");
 
     let csocket = msocket.clone();
 
     tokio::join!(
-        worker(0, csocket.clone(), cnetworks.clone()),
-        worker(1, csocket.clone(), cnetworks.clone()),
-        worker(2, csocket.clone(), cnetworks.clone()),
-        worker(3, csocket.clone(), cnetworks.clone()),
-        worker(4, csocket.clone(), cnetworks.clone()),
-        worker(5, csocket.clone(), cnetworks.clone()),
-        worker(6, csocket.clone(), cnetworks.clone()),
-        worker(7, csocket.clone(), cnetworks.clone()),
+        worker(0, csocket.clone(), cnetworks.clone(), priv_key.clone()),
+        worker(1, csocket.clone(), cnetworks.clone(), priv_key.clone()),
+        worker(2, csocket.clone(), cnetworks.clone(), priv_key.clone()),
+        worker(3, csocket.clone(), cnetworks.clone(), priv_key.clone()),
+        worker(4, csocket.clone(), cnetworks.clone(), priv_key.clone()),
+        worker(5, csocket.clone(), cnetworks.clone(), priv_key.clone()),
+        worker(6, csocket.clone(), cnetworks.clone(), priv_key.clone()),
+        worker(7, csocket.clone(), cnetworks.clone(), priv_key.clone()),
     );
 }
 
@@ -76,11 +98,12 @@ async fn worker(
     id: u8,
     csocket: Arc<UdpSocket>,
     cnetworks: Arc<RwLock<HashMap<Ipv4Addr, SocketAddr>>>,
+    priv_key: RsaPrivateKey,
 ) {
     loop {
         trace!("Packet router cycle {}", id);
 
-        let mut buffer = [0; 4096];
+        let mut buffer: Vec<u8> = vec![0; 4096];
 
         let socket = csocket.clone();
         let (read, addr) = match socket.recv_from(&mut buffer).await {
@@ -93,7 +116,25 @@ async fn worker(
             }
         };
 
-        info!("Packet from {} reading {} on worker {}", addr, read, id);
+        debug!("Packet from {} reading {} on worker {}", addr, read, id);
+
+        let mut packet: Vec<u8> = Vec::new();
+        let chunks = buffer[..read].chunks(256);
+        for chunk in chunks {
+            let mut p = match priv_key.decrypt(Pkcs1v15Encrypt, &chunk[..chunk.len()]) {
+                Ok(e) => e,
+                Err(e) => {
+                    error!("Error decrypting packet");
+                    // dbg!(&buffer[..read]);
+                    // dbg!(read);
+                    dbg!(e);
+
+                    continue;
+                }
+            };
+
+            packet.append(&mut p);
+        }
 
         let csocket = csocket.clone();
         let cnetworks = cnetworks.clone();
@@ -101,14 +142,15 @@ async fn worker(
         trace!("Packet router spawn to dial {}", addr);
         let socket = csocket.clone();
 
-        if let Ok(ip) = packet::ip::v4::Packet::new(&buffer) {
+        if let Ok(ip) = packet::ip::v4::Packet::new(&packet[..packet.len()]) {
+            dbg!(&ip);
             let source: Ipv4Addr = ip.source();
             let destination: Ipv4Addr = ip.destination();
             debug!("Packet is IP from {} to {}", source, destination);
 
             trace!("Lock for reading networks");
             let networks = cnetworks.read().await;
-            dbg!(&networks);
+            // dbg!(&networks);
 
             let m = networks.clone();
 
@@ -118,7 +160,7 @@ async fn worker(
             let w_from = m.get(&source);
             if w_from.is_none() {
                 error!("Packet source is not in networks");
-                dbg!(&source);
+                // dbg!(&source);
 
                 continue;
             }
@@ -146,8 +188,8 @@ async fn worker(
             debug!("Packet destination is in networks {}", &destination);
 
             let to = w_to.unwrap();
-            dbg!(&to);
-            match socket.send_to(&buffer[..read], to).await {
+            // dbg!(&to);
+            match socket.send_to(&packet[..packet.len()], to).await {
                 Ok(send) => {
                     if send == 0 {
                         error!("Nothing was sent");
@@ -157,7 +199,7 @@ async fn worker(
 
                     info!(
                         "Sent {} bytes from {} to {} on worker {}",
-                        send, from, to, id
+                        send, source, destination, id
                     );
                 }
                 Err(e) => {
