@@ -28,6 +28,8 @@ pub async fn serve() {
     tokio::spawn(async move {
         info!("Listening for peers on 1120");
 
+        let mut ip_to_mac = HashMap::<mac_address::MacAddress, Ipv4Addr>::new();
+
         let mut counter = 0;
 
         let socket = UdpSocket::bind("0.0.0.0:1120").await.unwrap();
@@ -72,23 +74,38 @@ pub async fn serve() {
                 .await
                 .unwrap();
 
-            // ---
+            if let Some(ip) = ip_to_mac.get(&mac) {
+                let peer = Ipv4Net::new(ip.clone(), 24).unwrap();
 
-            let peer = Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 100 + counter), 24).unwrap();
-            info!("Sending peer address to {}", addr);
+                let mut networks = cnetworks.write().await;
+                networks.insert(ip.clone(), (addr, peer_key));
+                drop(networks);
 
-            socket
-                .send_to(&bincode::serialize(&peer).unwrap(), addr)
-                .await
-                .unwrap();
+                socket
+                    .send_to(&bincode::serialize(&peer).unwrap(), addr)
+                    .await
+                    .unwrap();
 
-            let mut networks = cnetworks.write().await;
-            networks.insert(peer.addr(), (addr, peer_key));
-            drop(networks);
+                info!("Added peer: {} as {}", addr, ip);
+            } else {
+                let peer = Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 100 + counter), 24).unwrap();
+                info!("Sending peer address to {}", addr);
 
-            info!("Added peer: {} as {}", addr, peer.addr());
+                socket
+                    .send_to(&bincode::serialize(&peer).unwrap(), addr)
+                    .await
+                    .unwrap();
 
-            counter += 1;
+                let mut networks = cnetworks.write().await;
+                networks.insert(peer.addr(), (addr, peer_key));
+                drop(networks);
+
+                ip_to_mac.insert(mac, peer.addr());
+
+                info!("Added peer: {} as {}", addr, peer.addr());
+
+                counter += 1;
+            }
         }
     });
 
