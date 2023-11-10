@@ -106,33 +106,32 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
 
     info!("Connected to router");
 
-    let msocket = Arc::new(socket);
+    let sockets = Arc::new(socket);
 
-    let cwriter = writer.clone();
-    let csocket = msocket.clone();
+    let socket = sockets.clone();
+    let writer = writer.clone();
     tokio::spawn(async move {
         tokio::join!(
-            input(0, cwriter.clone(), csocket.clone(), priv_key.clone()),
-            input(1, cwriter.clone(), csocket.clone(), priv_key.clone()),
-            input(2, cwriter.clone(), csocket.clone(), priv_key.clone()),
-            input(3, cwriter.clone(), csocket.clone(), priv_key.clone())
+            input(0, socket.clone(), writer.clone(), priv_key.clone()),
+            input(1, socket.clone(), writer.clone(), priv_key.clone()),
+            input(2, socket.clone(), writer.clone(), priv_key.clone()),
+            input(3, socket.clone(), writer.clone(), priv_key.clone())
         );
     });
 
-    let creader = reader.clone();
-    let csocket = msocket.clone();
+    let socket = sockets.clone();
+    let reader = reader.clone();
     tokio::spawn(async move {
         tokio::join!(
-            output(0, creader.clone(), csocket.clone(), pub_key.clone()),
-            output(1, creader.clone(), csocket.clone(), pub_key.clone()),
-            output(2, creader.clone(), csocket.clone(), pub_key.clone()),
-            output(3, creader.clone(), csocket.clone(), pub_key.clone())
+            output(0, socket.clone(), reader.clone(), pub_key.clone()),
+            output(1, socket.clone(), reader.clone(), pub_key.clone()),
+            output(2, socket.clone(), reader.clone(), pub_key.clone()),
+            output(3, socket.clone(), reader.clone(), pub_key.clone())
         );
     });
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
-
-    let socket = msocket.clone();
+    let socket = sockets.clone();
     loop {
         trace!("Waiting for ping interval");
         interval.tick().await;
@@ -148,8 +147,8 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
 }
 async fn input(
     id: usize,
-    cwriter: Arc<Mutex<Writer>>,
-    csocket: Arc<UdpSocket>,
+    socket: Arc<UdpSocket>,
+    interface: Arc<Mutex<Writer>>,
     private_key: RsaPrivateKey,
 ) {
     loop {
@@ -157,7 +156,6 @@ async fn input(
 
         let mut buffer: Vec<u8> = vec![0; 4096];
 
-        let socket = csocket.clone();
         let recved = socket.recv(&mut buffer).await;
         let read = match recved {
             Ok(read) => read,
@@ -188,10 +186,8 @@ async fn input(
             packet.append(&mut p);
         }
 
-        if let Ok(ip) = packet::ip::v4::Packet::new(&packet[..packet.len()]) {
-            dbg!(ip);
-
-            let mut interface = cwriter.lock().await;
+        if let Ok(_ip) = packet::ip::v4::Packet::new(&packet[..packet.len()]) {
+            let mut interface = interface.lock().await;
             let to_write = interface.write(&packet[..packet.len()]);
             if let Err(e) = to_write {
                 error!("Failed to write packet due to {}", e);
@@ -212,8 +208,8 @@ async fn input(
 
 async fn output(
     id: usize,
-    creader: Arc<Mutex<Reader>>,
-    csocket: Arc<UdpSocket>,
+    socket: Arc<UdpSocket>,
+    interface: Arc<Mutex<Reader>>,
     pub_key: rsa::RsaPublicKey,
 ) {
     loop {
@@ -221,7 +217,7 @@ async fn output(
 
         let mut buffer: Vec<u8> = vec![0; 4096];
 
-        let mut interface = creader.lock().await;
+        let mut interface = interface.lock().await;
         let read = match interface.read(&mut buffer) {
             Ok(read) => read,
             Err(e) => {
@@ -250,7 +246,6 @@ async fn output(
                 data.append(&mut enc);
             }
 
-            let socket = csocket.clone();
             let sent = match socket.send(&data[..data.len()]).await {
                 Ok(sent) => {
                     dbg!(sent);

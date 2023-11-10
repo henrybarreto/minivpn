@@ -10,6 +10,12 @@ use std::{
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 
+#[derive(Debug, Clone)]
+struct Peer {
+    addr: SocketAddr,
+    key: RsaPublicKey,
+}
+
 pub async fn serve() {
     info!("Starting Obirt");
 
@@ -18,10 +24,8 @@ pub async fn serve() {
     let priv_key = RsaPrivateKey::new(&mut rng, bits).expect("failed to generate a key");
     let pub_key = RsaPublicKey::from(&priv_key);
 
-    let networks = HashMap::<Ipv4Addr, (SocketAddr, RsaPublicKey)>::new();
+    let networks = HashMap::<Ipv4Addr, Peer>::new();
     let mnetworks = Arc::new(RwLock::new(networks));
-
-    // let net = Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 24).unwrap();
 
     let cnetworks = mnetworks.clone();
     trace!("Spawning peer listener");
@@ -43,7 +47,7 @@ pub async fn serve() {
 
             let mac = match bincode::deserialize::<mac_address::MacAddress>(&buffer[..read]) {
                 Ok(mac) => mac,
-                Err(e) => {
+                Err(_) => {
                     error!("Error deserializing MAC address");
 
                     continue;
@@ -78,7 +82,13 @@ pub async fn serve() {
                 let peer = Ipv4Net::new(ip.clone(), 24).unwrap();
 
                 let mut networks = cnetworks.write().await;
-                networks.insert(ip.clone(), (addr, peer_key));
+                networks.insert(
+                    ip.clone(),
+                    Peer {
+                        addr,
+                        key: peer_key,
+                    },
+                );
                 drop(networks);
 
                 socket
@@ -97,7 +107,13 @@ pub async fn serve() {
                     .unwrap();
 
                 let mut networks = cnetworks.write().await;
-                networks.insert(peer.addr(), (addr, peer_key));
+                networks.insert(
+                    peer.addr(),
+                    Peer {
+                        addr,
+                        key: peer_key,
+                    },
+                );
                 drop(networks);
 
                 ip_to_mac.insert(mac, peer.addr());
@@ -133,8 +149,8 @@ pub async fn serve() {
 
 async fn worker(
     id: u8,
-    csocket: Arc<UdpSocket>,
-    cnetworks: Arc<RwLock<HashMap<Ipv4Addr, (SocketAddr, RsaPublicKey)>>>,
+    socket: Arc<UdpSocket>,
+    networks: Arc<RwLock<HashMap<Ipv4Addr, Peer>>>,
     priv_key: RsaPrivateKey,
 ) {
     loop {
@@ -142,7 +158,7 @@ async fn worker(
 
         let mut buffer: Vec<u8> = vec![0; 4096];
 
-        let socket = csocket.clone();
+        let socket = socket.clone();
         let (read, addr) = match socket.recv_from(&mut buffer).await {
             Ok((read, addr)) => (read, addr),
             Err(e) => {
@@ -158,12 +174,11 @@ async fn worker(
         let mut packet: Vec<u8> = Vec::new();
         let chunks = buffer[..read].chunks(256);
         for chunk in chunks {
+            // TODO: bottleneck.
             let mut p = match priv_key.decrypt(Pkcs1v15Encrypt, &chunk[..chunk.len()]) {
                 Ok(e) => e,
                 Err(e) => {
                     error!("Error decrypting packet");
-                    // dbg!(&buffer[..read]);
-                    // dbg!(read);
                     dbg!(e);
 
                     continue;
@@ -173,38 +188,31 @@ async fn worker(
             packet.append(&mut p);
         }
 
-        let csocket = csocket.clone();
-        let cnetworks = cnetworks.clone();
-
         trace!("Packet router spawn to dial {}", addr);
-        let socket = csocket.clone();
-
         if let Ok(ip) = packet::ip::v4::Packet::new(&packet[..packet.len()]) {
-            dbg!(&ip);
             let source: Ipv4Addr = ip.source();
             let destination: Ipv4Addr = ip.destination();
             debug!("Packet is IP from {} to {}", source, destination);
 
             trace!("Lock for reading networks");
-            let networks = cnetworks.read().await;
+            let networks = networks.read().await;
 
             let m = networks.clone();
 
             drop(networks);
             trace!("Done reading networks locking");
 
-            let w_from = m.get(&source);
-            if w_from.is_none() {
-                error!("Packet source is not in networks");
-                // dbg!(&source);
+            let from = match m.get(&source) {
+                Some(from) => from,
+                None => {
+                    error!("Packet source is not in networks");
+                    dbg!(&source);
 
-                continue;
-            }
+                    continue;
+                }
+            };
 
-            debug!("Packet source is in networks {}", &source);
-
-            let from = w_from.unwrap();
-            if from.0.to_string() != addr.to_string() {
+            if from.addr.to_string() != addr.to_string() {
                 error!("Packet source is not from the same address");
                 dbg!(from, &addr);
 
@@ -213,50 +221,30 @@ async fn worker(
 
             debug!("Packet source is from the same address {}", &addr);
 
-            let w_to = m.get(&destination);
-            if w_to.is_none() {
-                error!("Packet destination is not in networks");
-                dbg!(&destination);
+            let to = match m.get(&destination) {
+                Some(to) => to,
+                None => {
+                    error!("Packet destination is not in networks");
+                    dbg!(&destination);
 
-                continue;
-            }
+                    continue;
+                }
+            };
 
-            debug!("Packet destination is in networks {}", &destination);
-
-            let to = w_to.unwrap();
-            // match socket.send_to(&packet[..packet.len()], to.0).await {
-            //     Ok(send) => {
-            //         if send == 0 {
-            //             error!("Nothing was sent");
-            //             warn!("Removing {} from networks", &destination);
-            //             //networks.remove(&destination);
-            //         }
-
-            //         info!(
-            //             "Sent {} bytes from {} to {} on worker {}",
-            //             send, source, destination, id
-            //         );
-            //     }
-            //     Err(e) => {
-            //         error!("Error sending packet");
-            //         dbg!(e);
-            //         // When the destination is not reachable, remove it from the list.
-            //         //networks.remove(&destination);
-            //     }
-            // }
-
+            // TODO: bottleneck.
             let mut data: Vec<u8> = Vec::new();
             let chunks = packet[..packet.len()].chunks(128);
             for chunk in chunks {
                 let mut rng = rand::thread_rng();
-                let mut enc =
-                    to.1.encrypt(&mut rng, Pkcs1v15Encrypt, &chunk[..chunk.len()])
-                        .unwrap();
+                let mut enc = to
+                    .key
+                    .encrypt(&mut rng, Pkcs1v15Encrypt, &chunk[..chunk.len()])
+                    .unwrap();
 
                 data.append(&mut enc);
             }
 
-            match socket.send_to(&data[..data.len()], to.0).await {
+            match socket.send_to(&data[..data.len()], to.addr).await {
                 Ok(send) => {
                     if send == 0 {
                         error!("Nothing was sent");

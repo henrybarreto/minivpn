@@ -53,18 +53,11 @@ async fn main() {
 
             client::connect(server, port, interface).await;
         }
-        Some(("server", command)) => {
+        Some(("server", _)) => {
             server::serve().await;
         }
         _ => {
             println!("No subcommand was used");
         }
     }
-    // Retrieve values of address and port arguments
-    // let address = matches.value_source("address").unwrap();
-    // let port = matches.value_source("port").unwrap();
-
-    // Print the server information
-    // println!("Server Address: {:?}", address);
-    // println!("Server Port: {:?}", port);
 }
