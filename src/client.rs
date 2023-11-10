@@ -138,7 +138,7 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
         interval.tick().await;
         trace!("Ping time interval reached");
 
-        let buffer = [0; 1];
+        let buffer = [254; 1];
         if let Err(e) = socket.send(&buffer).await {
             error!("Failed to ping the server due {}", e);
         }
