@@ -27,12 +27,12 @@ sequenceDiagram
 participant interface
 participant client
 participant server
-client ->>+ server: Send Mac address
 client ->> client: Generate key pair
-client ->> server: Send peer Public Key
-server -->> client: Send server Public Key
+client ->>+ server: Send peer Public Key
+server -->> client: Receive server Public Key
+client ->> server: Send Mac address
 server ->> server: Store the client information in the server
-server -->> client: Send IP and Mask to bind
+server -->> client: Receive IP and Mask to bind
 client ->>+ interface: Create network interface
 
 loop Keep alive

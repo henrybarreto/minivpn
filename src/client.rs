@@ -18,20 +18,6 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
 
     info!("Registering peer on the server");
 
-    info!("Sending MAC address to server");
-    let mac = mac_address::get_mac_address().unwrap();
-    // TODO: send a identity to server identify the peer and bind it to a address.
-    // TODO: validate errors.
-    socket
-        .send_to(
-            &bincode::serialize(&mac.unwrap()).unwrap(),
-            format!("{}:{}", server, "1120"),
-        )
-        .await
-        .unwrap();
-
-    info!("Sent MAC address to server");
-
     info!("Generating key pair");
     let mut rng = rand::thread_rng();
     let bits = 2048;
@@ -49,7 +35,7 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
         .unwrap();
     info!("Sent public key to server");
 
-    trace!("Waiting for server public key");
+    info!("Waiting for server public key");
 
     let mut buf = [0; 4096];
     let (read, _) = socket.recv_from(&mut buf).await.unwrap();
@@ -65,10 +51,20 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
 
     trace!("Received server public key");
 
-    // TODO: validate errors.
-    let (read, _) = socket.recv_from(&mut buf).await.unwrap();
+    info!("Sending MAC address to server");
+    let mac = mac_address::get_mac_address().unwrap();
+    socket
+        .send_to(
+            &bincode::serialize(&mac.unwrap()).unwrap(),
+            format!("{}:{}", server, "1120"),
+        )
+        .await
+        .unwrap();
 
-    info!("Received response from server {}", read);
+    info!("Sent MAC address to server");
+
+    info!("Waiting for peer registration response");
+    let (read, _) = socket.recv_from(&mut buf).await.unwrap();
 
     let bytes = bincode::deserialize(&buf[..read]);
     let peer: Ipv4Net = match bytes {

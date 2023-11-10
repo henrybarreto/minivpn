@@ -38,7 +38,30 @@ pub async fn serve() {
 
         let socket = UdpSocket::bind("0.0.0.0:1120").await.unwrap();
         loop {
-            let mut buffer = [0; 1024];
+            let mut buffer = [0; 4096];
+
+            let (read, addr) = match socket.recv_from(&mut buffer).await {
+                Ok((read, addr)) => (read, addr),
+                Err(_) => continue,
+            };
+
+            info!("New peer request from {}", addr);
+
+            let peer_key = match bincode::deserialize::<RsaPublicKey>(&buffer[..read]) {
+                Ok(key) => key,
+                Err(_) => continue,
+            };
+
+            info!("Received public key from {}", addr);
+
+            info!("Sending public key to {}", addr);
+            socket
+                .send_to(&bincode::serialize(&pub_key.clone()).unwrap(), addr)
+                .await
+                .unwrap();
+            info!("Sent public key to {}", addr);
+
+            info!("Waiting for MAC address from {}", addr);
 
             let (read, addr) = match socket.recv_from(&mut buffer).await {
                 Ok((read, addr)) => (read, addr),
@@ -54,29 +77,7 @@ pub async fn serve() {
                 }
             };
 
-            info!("Received peer request from {} with MAC {}", addr, mac);
-
-            info!("Requesting public key from {}", addr);
-
-            let (read, addr) = match socket.recv_from(&mut buffer).await {
-                Ok((read, addr)) => (read, addr),
-                Err(_) => continue,
-            };
-
-            info!("Received public key from {}", addr);
-
-            let peer_key = match bincode::deserialize::<RsaPublicKey>(&buffer[..read]) {
-                Ok(key) => key,
-                Err(_) => continue,
-            };
-
-            info!("Received public key from {}", addr);
-
-            info!("Sending public key to {}", addr);
-            socket
-                .send_to(&bincode::serialize(&pub_key.clone()).unwrap(), addr)
-                .await
-                .unwrap();
+            info!("Received peer request from MAC {}", mac);
 
             if let Some(ip) = ip_to_mac.get(&mac) {
                 let peer = Ipv4Net::new(ip.clone(), 24).unwrap();
