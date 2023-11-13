@@ -4,6 +4,7 @@ use log::{debug, error, info, trace};
 use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
 use std::io::{Read, Write};
 use std::sync::Arc;
+use std::thread;
 use tokio::{net::UdpSocket, sync::Mutex};
 use tun::platform::posix::{Reader, Writer};
 

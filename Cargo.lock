@@ -551,6 +551,7 @@ dependencies = [
  "ipnet",
  "log",
  "mac_address",
+ "num_cpus",
  "packet",
  "rand",
  "rsa",

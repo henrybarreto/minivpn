@@ -19,112 +19,24 @@ struct Peer {
 pub async fn serve() {
     info!("Starting Obirt");
 
+    trace!("Generating RSA pair");
     let mut rng = rand::thread_rng();
     let bits = 2048;
     let priv_key = RsaPrivateKey::new(&mut rng, bits).expect("failed to generate a key");
     let pub_key = RsaPublicKey::from(&priv_key);
+    info!("RSA key pair generated");
 
     let networks = HashMap::<Ipv4Addr, Peer>::new();
     let mnetworks = Arc::new(RwLock::new(networks));
 
     let cnetworks = mnetworks.clone();
-    trace!("Spawning peer listener");
-    tokio::spawn(async move {
-        info!("Listening for peers on 1120");
 
-        let mut ip_to_mac = HashMap::<mac_address::MacAddress, Ipv4Addr>::new();
+    // TODO:
+    let socket = UdpSocket::bind("0.0.0.0:1120").await.unwrap();
+    let msocket = Arc::new(socket);
+    info!("Listening for auth on 1120");
 
-        let mut counter = 0;
-
-        let socket = UdpSocket::bind("0.0.0.0:1120").await.unwrap();
-        loop {
-            let mut buffer = [0; 4096];
-
-            let (read, addr) = match socket.recv_from(&mut buffer).await {
-                Ok((read, addr)) => (read, addr),
-                Err(_) => continue,
-            };
-
-            info!("New peer request from {}", addr);
-
-            let peer_key = match bincode::deserialize::<RsaPublicKey>(&buffer[..read]) {
-                Ok(key) => key,
-                Err(_) => continue,
-            };
-
-            info!("Received public key from {}", addr);
-
-            info!("Sending public key to {}", addr);
-            socket
-                .send_to(&bincode::serialize(&pub_key.clone()).unwrap(), addr)
-                .await
-                .unwrap();
-            info!("Sent public key to {}", addr);
-
-            info!("Waiting for MAC address from {}", addr);
-
-            let (read, addr) = match socket.recv_from(&mut buffer).await {
-                Ok((read, addr)) => (read, addr),
-                Err(_) => continue,
-            };
-
-            let mac = match bincode::deserialize::<mac_address::MacAddress>(&buffer[..read]) {
-                Ok(mac) => mac,
-                Err(_) => {
-                    error!("Error deserializing MAC address");
-
-                    continue;
-                }
-            };
-
-            info!("Received peer request from MAC {}", mac);
-
-            if let Some(ip) = ip_to_mac.get(&mac) {
-                let peer = Ipv4Net::new(ip.clone(), 24).unwrap();
-
-                let mut networks = cnetworks.write().await;
-                networks.insert(
-                    ip.clone(),
-                    Peer {
-                        addr,
-                        key: peer_key,
-                    },
-                );
-                drop(networks);
-
-                socket
-                    .send_to(&bincode::serialize(&peer).unwrap(), addr)
-                    .await
-                    .unwrap();
-
-                info!("Added peer: {} as {}", addr, ip);
-            } else {
-                let peer = Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 100 + counter), 24).unwrap();
-                info!("Sending peer address to {}", addr);
-
-                socket
-                    .send_to(&bincode::serialize(&peer).unwrap(), addr)
-                    .await
-                    .unwrap();
-
-                let mut networks = cnetworks.write().await;
-                networks.insert(
-                    peer.addr(),
-                    Peer {
-                        addr,
-                        key: peer_key,
-                    },
-                );
-                drop(networks);
-
-                ip_to_mac.insert(mac, peer.addr());
-
-                info!("Added peer: {} as {}", addr, peer.addr());
-
-                counter += 1;
-            }
-        }
-    });
+    tokio::spawn(auther(msocket.clone(), cnetworks, pub_key));
 
     let cnetworks = mnetworks.clone();
 
@@ -146,6 +58,106 @@ pub async fn serve() {
         worker(6, csocket.clone(), cnetworks.clone(), priv_key.clone()),
         worker(7, csocket.clone(), cnetworks.clone(), priv_key.clone()),
     );
+}
+
+async fn auther(
+    socket: Arc<UdpSocket>,
+    networks: Arc<RwLock<HashMap<Ipv4Addr, Peer>>>,
+    pub_key: RsaPublicKey,
+) {
+    let mut ip_to_mac = HashMap::<mac_address::MacAddress, Ipv4Addr>::new();
+
+    let mut counter = 0;
+    loop {
+        let mut buffer = [0; 4096];
+
+        let (read, addr) = match socket.recv_from(&mut buffer).await {
+            Ok((read, addr)) => (read, addr),
+            Err(_) => continue,
+        };
+
+        info!("New peer request from {}", addr);
+
+        let peer_key = match bincode::deserialize::<RsaPublicKey>(&buffer[..read]) {
+            Ok(key) => key,
+            Err(_) => continue,
+        };
+
+        info!("Received public key from {}", addr);
+
+        info!("Sending public key to {}", addr);
+        socket
+            .send_to(&bincode::serialize(&pub_key.clone()).unwrap(), addr)
+            .await
+            .unwrap();
+        info!("Sent public key to {}", addr);
+
+        info!("Waiting for MAC address from {}", addr);
+
+        let (read, addr) = match socket.recv_from(&mut buffer).await {
+            Ok((read, addr)) => (read, addr),
+            Err(_) => continue,
+        };
+
+        let mac = match bincode::deserialize::<mac_address::MacAddress>(&buffer[..read]) {
+            Ok(mac) => mac,
+            Err(_) => {
+                error!("Error deserializing MAC address");
+
+                continue;
+            }
+        };
+
+        info!("Received peer request from MAC {}", mac);
+
+        if let Some(ip) = ip_to_mac.get(&mac) {
+            info!("Peer already registered");
+            let peer = Ipv4Net::new(ip.clone(), 24).unwrap();
+
+            let mut networks = networks.write().await;
+            networks.insert(
+                ip.clone(),
+                Peer {
+                    addr,
+                    key: peer_key,
+                },
+            );
+            drop(networks);
+
+            info!("Sending peer address to {}", addr);
+            socket
+                .send_to(&bincode::serialize(&peer).unwrap(), addr)
+                .await
+                .unwrap();
+
+            info!("Added peer: {} as {}", addr, ip);
+        } else {
+            info!("New peer to register");
+            let peer = Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 100 + counter), 24).unwrap();
+
+            let mut networks = networks.write().await;
+            networks.insert(
+                peer.addr(),
+                Peer {
+                    addr,
+                    key: peer_key,
+                },
+            );
+            drop(networks);
+
+            ip_to_mac.insert(mac, peer.addr());
+
+            info!("Sending peer address to {}", addr);
+            socket
+                .send_to(&bincode::serialize(&peer).unwrap(), addr)
+                .await
+                .unwrap();
+
+            info!("Added peer: {} as {}", addr, peer.addr());
+
+            counter += 1;
+        }
+    }
 }
 
 async fn worker(
