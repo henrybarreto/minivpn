@@ -1,7 +1,7 @@
 use ipnet::Ipv4Net;
 use log::{debug, error, info, trace, warn};
 use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
-use std::io::{Read, Write};
+use std::io::{Error, Read, Write};
 use std::{
     collections::HashMap,
     net::{Ipv4Addr, SocketAddr},
@@ -19,7 +19,7 @@ struct Peer {
 pub async fn serve() {
     info!("Starting Obirt");
 
-    trace!("Generating RSA pair");
+    info!("Generating RSA pair");
     let mut rng = rand::thread_rng();
     let bits = 2048;
     let priv_key = RsaPrivateKey::new(&mut rng, bits).expect("failed to generate a key");
@@ -41,22 +41,19 @@ pub async fn serve() {
     let cnetworks = mnetworks.clone();
 
     let socket = UdpSocket::bind("0.0.0.0:9807").await.unwrap();
-    let msocket = Arc::new(socket);
 
     info!("Listening for packets on 9807");
     info!("Ready to route packets");
 
-    let csocket = msocket.clone();
-
     tokio::join!(
-        worker(0, csocket.clone(), cnetworks.clone(), priv_key.clone()),
-        worker(1, csocket.clone(), cnetworks.clone(), priv_key.clone()),
-        worker(2, csocket.clone(), cnetworks.clone(), priv_key.clone()),
-        worker(3, csocket.clone(), cnetworks.clone(), priv_key.clone()),
-        worker(4, csocket.clone(), cnetworks.clone(), priv_key.clone()),
-        worker(5, csocket.clone(), cnetworks.clone(), priv_key.clone()),
-        worker(6, csocket.clone(), cnetworks.clone(), priv_key.clone()),
-        worker(7, csocket.clone(), cnetworks.clone(), priv_key.clone()),
+        worker(0, &socket, cnetworks.clone(), &priv_key),
+        worker(1, &socket, cnetworks.clone(), &priv_key),
+        worker(2, &socket, cnetworks.clone(), &priv_key),
+        worker(3, &socket, cnetworks.clone(), &priv_key),
+        worker(4, &socket, cnetworks.clone(), &priv_key),
+        worker(5, &socket, cnetworks.clone(), &priv_key),
+        worker(6, &socket, cnetworks.clone(), &priv_key),
+        worker(7, &socket, cnetworks.clone(), &priv_key),
     );
 }
 
@@ -160,32 +157,83 @@ async fn auther(
     }
 }
 
-async fn worker(
-    id: u8,
-    socket: Arc<UdpSocket>,
-    networks: Arc<RwLock<HashMap<Ipv4Addr, Peer>>>,
-    priv_key: RsaPrivateKey,
-) {
-    loop {
-        trace!("Packet router cycle {}", id);
+#[derive(Debug, Clone)]
+pub struct Received {
+    pub read: usize,
+    pub addr: SocketAddr,
+    pub data: Vec<u8>,
+}
 
-        let mut buffer: Vec<u8> = vec![0; 4096];
+async fn recv(socket: &UdpSocket) -> Result<Received, Error> {
+    let mut data: Vec<u8> = vec![0; 4096];
+    let (read, addr) = match socket.recv_from(&mut data).await {
+        Ok((read, addr)) => (read, addr),
+        Err(e) => {
+            return Err(e);
+        }
+    };
 
-        let socket = socket.clone();
-        let (read, addr) = match socket.recv_from(&mut buffer).await {
-            Ok((read, addr)) => (read, addr),
-            Err(e) => {
-                error!("Error receiving packet");
-                dbg!(e);
+    return Ok(Received { read, addr, data });
+}
 
+fn decrypt(data: Vec<u8>, priv_key: &RsaPrivateKey) -> Result<Vec<u8>, rsa::Error> {
+    let mut packet: Vec<u8> = Vec::new();
+    let chunks = data[..data.len()].chunks(256);
+    for chunk in chunks {
+        // TODO: bottleneck.
+        let mut p = match priv_key.decrypt(Pkcs1v15Encrypt, &chunk[..chunk.len()]) {
+            Ok(e) => e,
+            Err(_) => {
                 continue;
             }
         };
 
-        debug!("Packet from {} reading {} on worker {}", addr, read, id);
+        packet.append(&mut p);
+    }
+
+    return Ok(packet);
+}
+
+fn encrypt(data: Vec<u8>, pub_key: &RsaPublicKey) -> Result<Vec<u8>, rsa::Error> {
+    let mut buffer: Vec<u8> = Vec::new();
+    let chunks = data[..data.len()].chunks(128);
+    for chunk in chunks {
+        let mut rng = rand::thread_rng();
+        let enc = pub_key.encrypt(&mut rng, Pkcs1v15Encrypt, &chunk[..chunk.len()]);
+        if let Err(e) = enc {
+            return Err(e);
+        }
+
+        buffer.append(&mut enc.unwrap());
+    }
+
+    return Ok(buffer);
+}
+
+async fn worker(
+    id: u8,
+    socket: &UdpSocket,
+    networks: Arc<RwLock<HashMap<Ipv4Addr, Peer>>>,
+    priv_key: &RsaPrivateKey,
+) {
+    loop {
+        trace!("Packet router cycle {}", id);
+
+        let buffer = recv(&socket).await;
+        if let Err(_) = buffer {
+            error!("Error receiving packet");
+            continue;
+        }
+
+        let data = buffer.unwrap();
+
+        debug!(
+            "Packet from {} reading {} on worker {}",
+            data.addr, data.read, id
+        );
 
         let mut packet: Vec<u8> = Vec::new();
-        let chunks = buffer[..read].chunks(256);
+        let chunks = data.data[..data.read].chunks(256);
         for chunk in chunks {
             // TODO: bottleneck.
             let mut p = match priv_key.decrypt(Pkcs1v15Encrypt, &chunk[..chunk.len()]) {
@@ -201,61 +249,50 @@ async fn worker(
             packet.append(&mut p);
         }
 
-        trace!("Packet router spawn to dial {}", addr);
+        // let decrypted = decrypt(buffer, priv_key);
+        // if let Err(_) = decrypted {
+        //     continue;
+        // }
+
+        // let packet = decrypted.unwrap();
+
+        trace!("Packet router spawn to dial {}", data.addr);
         if let Ok(ip) = packet::ip::v4::Packet::new(&packet[..packet.len()]) {
             let source: Ipv4Addr = ip.source();
             let destination: Ipv4Addr = ip.destination();
-            debug!("Packet is IP from {} to {}", source, destination);
+            info!("Packet is IP from {} to {}", source, destination);
 
-            trace!("Lock for reading networks");
             let networks = networks.read().await;
 
-            let m = networks.clone();
+            // let from = match networks.get(&source) {
+            //     Some(from) => from,
+            //     None => {
+            //         error!("Packet source is not in networks");
+            //         dbg!(&source);
 
-            drop(networks);
-            trace!("Done reading networks locking");
+            //         continue;
+            //     }
+            // };
 
-            let from = match m.get(&source) {
-                Some(from) => from,
-                None => {
-                    error!("Packet source is not in networks");
-                    dbg!(&source);
+            let got = networks.get(&destination);
+            if let None = got {
+                error!("Packet destination is not in networks");
+                dbg!(&destination);
 
-                    continue;
-                }
+                continue;
             };
 
-            if from.addr.to_string() != addr.to_string() {
-                error!("Packet source is not from the same address");
-                dbg!(from, &addr);
+            let to = got.unwrap();
 
+            let encrypted = encrypt(packet, &to.key);
+            if let Err(e) = encrypted {
+                error!("Failed to encrypt the IP packet for {}", &destination);
+
+                dbg!(e);
                 continue;
             }
 
-            debug!("Packet source is from the same address {}", &addr);
-
-            let to = match m.get(&destination) {
-                Some(to) => to,
-                None => {
-                    error!("Packet destination is not in networks");
-                    dbg!(&destination);
-
-                    continue;
-                }
-            };
-
-            // TODO: bottleneck.
-            let mut data: Vec<u8> = Vec::new();
-            let chunks = packet[..packet.len()].chunks(128);
-            for chunk in chunks {
-                let mut rng = rand::thread_rng();
-                let mut enc = to
-                    .key
-                    .encrypt(&mut rng, Pkcs1v15Encrypt, &chunk[..chunk.len()])
-                    .unwrap();
-
-                data.append(&mut enc);
-            }
+            let data = encrypted.unwrap();
 
             match socket.send_to(&data[..data.len()], to.addr).await {
                 Ok(send) => {
@@ -278,7 +315,7 @@ async fn worker(
                 }
             }
         } else {
-            warn!("Packet received from {} is not IP", addr);
+            warn!("Packet received from {} is not IP", data.addr);
         }
     }
 }
