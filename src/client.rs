@@ -6,7 +6,6 @@ use rsa::pkcs8::LineEnding;
 use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt::format;
 use std::io::{Read, Write};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -183,21 +182,14 @@ async fn input(
 
         info!("Received {} bytes using {}", read, id);
 
-        let mut packet: Vec<u8> = Vec::new();
-        let chunks = buffer[..read].chunks(256);
-        for chunk in chunks {
-            let mut p = match private_key.decrypt(Pkcs1v15Encrypt, &chunk[..chunk.len()]) {
-                Ok(e) => e,
-                Err(e) => {
-                    error!("Error decrypting packet");
-                    dbg!(e);
+        let packet = match decrypt(buffer[..read].to_vec(), private_key) {
+            Ok(e) => e,
+            Err(e) => {
+                error!("Failed to decrypt packet due to {}", e);
 
-                    continue;
-                }
-            };
-
-            packet.append(&mut p);
-        }
+                continue;
+            }
+        };
 
         if let Ok(_ip) = packet::ip::v4::Packet::new(&packet[..packet.len()]) {
             let mut interface = interface.lock().await;
@@ -260,19 +252,14 @@ async fn output(
             };
 
             let key = got.unwrap();
+            let data = match encrypt(buffer[..read].to_vec(), key) {
+                Ok(e) => e,
+                Err(e) => {
+                    error!("Failed to encrypt packet due to {}", e);
 
-            let mut data: Vec<u8> = Vec::new();
-            let chunks = buffer[..read].chunks(128);
-            for chunk in chunks {
-                let mut rng = rand::thread_rng();
-                let enc = key.encrypt(&mut rng, Pkcs1v15Encrypt, &chunk[..chunk.len()]);
-                if let Err(e) = enc {
-                    dbg!(e);
                     continue;
                 }
-
-                data.append(&mut enc.unwrap());
-            }
+            };
 
             let sent = match socket
                 .send(
@@ -303,36 +290,36 @@ async fn output(
     }
 }
 
-// fn decrypt(data: Vec<u8>, priv_key: &RsaPrivateKey) -> Result<Vec<u8>, rsa::Error> {
-//     let mut packet: Vec<u8> = Vec::new();
-//     let chunks = data[..data.len()].chunks(256);
-//     for chunk in chunks {
-//         // TODO: bottleneck.
-//         let mut p = match priv_key.decrypt(Pkcs1v15Encrypt, &chunk[..chunk.len()]) {
-//             Ok(e) => e,
-//             Err(_) => {
-//                 continue;
-//             }
-//         };
-//
-//         packet.append(&mut p);
-//     }
-//
-//     return Ok(packet);
-// }
-//
-// fn encrypt(data: Vec<u8>, pub_key: &RsaPublicKey) -> Result<Vec<u8>, rsa::Error> {
-//     let mut buffer: Vec<u8> = Vec::new();
-//     let chunks = data[..data.len()].chunks(128);
-//     for chunk in chunks {
-//         let mut rng = rand::thread_rng();
-//         let enc = pub_key.encrypt(&mut rng, Pkcs1v15Encrypt, &chunk[..chunk.len()]);
-//         if let Err(e) = enc {
-//             return Err(e);
-//         }
-//
-//         buffer.append(&mut enc.unwrap());
-//     }
-//
-//     return Ok(buffer);
-// }
+fn decrypt(data: Vec<u8>, priv_key: &RsaPrivateKey) -> Result<Vec<u8>, rsa::Error> {
+    let mut packet: Vec<u8> = Vec::new();
+    let chunks = data[..data.len()].chunks(256);
+    for chunk in chunks {
+        // TODO: bottleneck.
+        let mut p = match priv_key.decrypt(Pkcs1v15Encrypt, &chunk[..chunk.len()]) {
+            Ok(e) => e,
+            Err(_) => {
+                continue;
+            }
+        };
+
+        packet.append(&mut p);
+    }
+
+    return Ok(packet);
+}
+
+fn encrypt(data: Vec<u8>, pub_key: &RsaPublicKey) -> Result<Vec<u8>, rsa::Error> {
+    let mut buffer: Vec<u8> = Vec::new();
+    let chunks = data[..data.len()].chunks(128);
+    for chunk in chunks {
+        let mut rng = rand::thread_rng();
+        let enc = pub_key.encrypt(&mut rng, Pkcs1v15Encrypt, &chunk[..chunk.len()]);
+        if let Err(e) = enc {
+            return Err(e);
+        }
+
+        buffer.append(&mut enc.unwrap());
+    }
+
+    return Ok(buffer);
+}

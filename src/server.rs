@@ -120,7 +120,7 @@ pub struct Received {
 }
 
 async fn recv(socket: &UdpSocket) -> Result<Received, Error> {
-    let mut data: Vec<u8> = vec![0; 4096];
+    let mut data: Vec<u8> = vec![0; 1000000];
     let (read, addr) = match socket.recv_from(&mut data).await {
         Ok((read, addr)) => (read, addr),
         Err(e) => {
@@ -148,13 +148,38 @@ async fn worker(id: u8, socket: &UdpSocket, networks: Arc<RwLock<HashMap<Ipv4Add
             data.addr, data.read, id
         );
 
-        let packet: IP = bincode::deserialize(&data.data).unwrap();
+        let packet: IP = match bincode::deserialize(&data.data) {
+            Ok(packet) => packet,
+            Err(e) => {
+                error!("Error deserializing packet");
+                dbg!(e);
+                continue;
+            }
+        };
 
         let source = packet.source;
         let destination = packet.destination;
-        info!("Packet is IP from {} to {}", source, destination);
+        debug!("Packet is IP from {} to {}", source, destination);
 
         let networks = networks.read().await;
+
+        let got = networks.get(&source);
+        if let None = got {
+            error!("Packet source is not in networks");
+            dbg!(&source);
+
+            continue;
+        };
+
+        let from = got.unwrap();
+
+        if from.addr != data.addr {
+            error!("Packet source does not match source address");
+            dbg!(&from.addr);
+            dbg!(&data.addr);
+
+            continue;
+        }
 
         let got = networks.get(&destination);
         if let None = got {

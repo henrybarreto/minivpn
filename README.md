@@ -27,10 +27,9 @@ sequenceDiagram
 participant interface
 participant client
 participant server
-client ->> client: Generate key pair
-client ->>+ server: Send peer Public Key
-server -->> client: Receive server Public Key
-client ->> server: Send Mac address
+client ->> client: Load peer private key
+client ->> client: Load peers public key
+client ->>+ server: Send Mac address
 server ->> server: Store the client information in the server
 server -->> client: Receive IP and Mask to bind
 client ->>+ interface: Create network interface
@@ -42,7 +41,7 @@ end
 loop Every IP package
     par From Client
     interface ->> client: Receive the IP package
-    client ->> client: Encrypt the package
+    client ->> client: Encrypt the package with destination public key
     client ->> server: Send the IP package to server
     server ->> server: Look for the package's destination and sent it
     end
