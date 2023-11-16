@@ -1,10 +1,18 @@
 use bincode;
 use ipnet::Ipv4Net;
 use log::{debug, error, info, trace};
+use rsa::pkcs1::{DecodeRsaPrivateKey, DecodeRsaPublicKey, EncodeRsaPublicKey};
+use rsa::pkcs8::LineEnding;
 use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fmt::format;
 use std::io::{Read, Write};
+use std::net::Ipv4Addr;
 use std::sync::Arc;
-use std::thread;
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::RwLock;
 use tokio::{net::UdpSocket, sync::Mutex};
 use tun::platform::posix::{Reader, Writer};
 
@@ -19,39 +27,7 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
 
     info!("Registering peer on the server");
 
-    info!("Generating key pair");
-    let mut rng = rand::thread_rng();
-    let bits = 2048;
-    let priv_key = RsaPrivateKey::new(&mut rng, bits).expect("failed to generate a key");
-    let pub_key = RsaPublicKey::from(&priv_key);
-    info!("Generated key pair");
-
-    info!("Sending public key to server");
-    socket
-        .send_to(
-            &bincode::serialize(&pub_key).unwrap(),
-            format!("{}:{}", server, "1120"),
-        )
-        .await
-        .unwrap();
-    info!("Sent public key to server");
-
-    info!("Waiting for server public key");
-
     let mut buf = [0; 4096];
-    let (read, _) = socket.recv_from(&mut buf).await.unwrap();
-
-    let bytes = bincode::deserialize(&buf[..read]);
-    let pub_key: rsa::RsaPublicKey = match bytes {
-        Ok(me) => me,
-        Err(e) => {
-            error!("Error deserializing server public key due {}", e);
-            return;
-        }
-    };
-
-    trace!("Received server public key");
-
     info!("Sending MAC address to server");
     let mac = mac_address::get_mac_address().unwrap();
     socket
@@ -103,16 +79,50 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
 
     info!("Connected to router");
 
+    let mut file = File::open("./peers.toml").await.unwrap();
+    let mut buffer = [0; 4096];
+    file.read(&mut buffer).await.unwrap();
+
+    let peers_str: HashMap<Ipv4Addr, String> = toml::de::from_str(
+        std::str::from_utf8(&buffer[..])
+            .unwrap()
+            .trim_matches(char::from(0)),
+    )
+    .unwrap();
+
+    let mut file = File::open("./peer.toml").await.unwrap();
+    let mut buffer = [0; 4096];
+    file.read(&mut buffer).await.unwrap();
+
+    let peer_str = std::str::from_utf8(&buffer[..])
+        .unwrap()
+        .trim_matches(char::from(0));
+
+    let peer = rsa::RsaPrivateKey::from_pkcs1_pem(&peer_str).unwrap();
+    peer.to_public_key()
+        .write_pkcs1_pem_file("me.pem", LineEnding::LF)
+        .unwrap();
+
+    let mut peers = HashMap::<Ipv4Addr, rsa::RsaPublicKey>::new();
+    for p in peers_str {
+        let str = p.1;
+        let key = rsa::RsaPublicKey::from_pkcs1_pem(&str).unwrap();
+
+        peers.insert(p.0, key);
+    }
+
+    let mpeers = Arc::new(RwLock::new(peers));
+
     let sockets = Arc::new(socket);
 
     let socket = sockets.clone();
     let writer = writer.clone();
     tokio::spawn(async move {
         tokio::join!(
-            input(0, socket.clone(), writer.clone(), priv_key.clone()),
-            input(1, socket.clone(), writer.clone(), priv_key.clone()),
-            input(2, socket.clone(), writer.clone(), priv_key.clone()),
-            input(3, socket.clone(), writer.clone(), priv_key.clone())
+            input(0, socket.clone(), writer.clone(), &peer),
+            input(1, socket.clone(), writer.clone(), &peer),
+            input(2, socket.clone(), writer.clone(), &peer),
+            input(3, socket.clone(), writer.clone(), &peer)
         );
     });
 
@@ -120,10 +130,10 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
     let reader = reader.clone();
     tokio::spawn(async move {
         tokio::join!(
-            output(0, socket.clone(), reader.clone(), pub_key.clone()),
-            output(1, socket.clone(), reader.clone(), pub_key.clone()),
-            output(2, socket.clone(), reader.clone(), pub_key.clone()),
-            output(3, socket.clone(), reader.clone(), pub_key.clone())
+            output(0, socket.clone(), reader.clone(), mpeers.clone()),
+            output(1, socket.clone(), reader.clone(), mpeers.clone()),
+            output(2, socket.clone(), reader.clone(), mpeers.clone()),
+            output(3, socket.clone(), reader.clone(), mpeers.clone())
         );
     });
 
@@ -142,11 +152,19 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
         info!("Ping");
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IP {
+    pub source: Ipv4Addr,
+    pub destination: Ipv4Addr,
+    pub data: Vec<u8>,
+}
+
 async fn input(
     id: usize,
     socket: Arc<UdpSocket>,
     interface: Arc<Mutex<Writer>>,
-    private_key: RsaPrivateKey,
+    private_key: &RsaPrivateKey,
 ) {
     loop {
         trace!("Receiving cycle {}", id);
@@ -172,8 +190,6 @@ async fn input(
                 Ok(e) => e,
                 Err(e) => {
                     error!("Error decrypting packet");
-                    // dbg!(&buffer[..read]);
-                    // dbg!(read);
                     dbg!(e);
 
                     continue;
@@ -207,7 +223,7 @@ async fn output(
     id: usize,
     socket: Arc<UdpSocket>,
     interface: Arc<Mutex<Reader>>,
-    pub_key: rsa::RsaPublicKey,
+    peers: Arc<RwLock<HashMap<Ipv4Addr, rsa::RsaPublicKey>>>,
 ) {
     loop {
         trace!("Sending cycle {}", id);
@@ -224,26 +240,51 @@ async fn output(
                 continue;
             }
         };
+        drop(interface);
 
         info!("Read {} bytes using {}", read, id);
 
-        // chuncks of 128 bytes
-        if let Ok(_) = packet::ip::v4::Packet::new(&buffer[..read]) {
+        if let Ok(ip) = packet::ip::v4::Packet::new(&buffer[..read]) {
+            let source: Ipv4Addr = ip.source();
+            let destination: Ipv4Addr = ip.destination();
             debug!("Packet read from tun is IP");
 
-            let mut data: Vec<u8> = Vec::new();
+            let cloned = peers.clone();
+            let peers = cloned.read().await;
+            let got = peers.get(&destination);
+            if let None = got {
+                error!("Client does not have a public key to this peer");
+                dbg!(&destination);
 
+                continue;
+            };
+
+            let key = got.unwrap();
+
+            let mut data: Vec<u8> = Vec::new();
             let chunks = buffer[..read].chunks(128);
             for chunk in chunks {
                 let mut rng = rand::thread_rng();
-                let mut enc = pub_key
-                    .encrypt(&mut rng, Pkcs1v15Encrypt, &chunk[..chunk.len()])
-                    .unwrap();
+                let enc = key.encrypt(&mut rng, Pkcs1v15Encrypt, &chunk[..chunk.len()]);
+                if let Err(e) = enc {
+                    dbg!(e);
+                    continue;
+                }
 
-                data.append(&mut enc);
+                data.append(&mut enc.unwrap());
             }
 
-            let sent = match socket.send(&data[..data.len()]).await {
+            let sent = match socket
+                .send(
+                    &bincode::serialize(&IP {
+                        source,
+                        destination,
+                        data,
+                    })
+                    .unwrap(),
+                )
+                .await
+            {
                 Ok(sent) => {
                     dbg!(sent);
                     sent
@@ -261,3 +302,37 @@ async fn output(
         }
     }
 }
+
+// fn decrypt(data: Vec<u8>, priv_key: &RsaPrivateKey) -> Result<Vec<u8>, rsa::Error> {
+//     let mut packet: Vec<u8> = Vec::new();
+//     let chunks = data[..data.len()].chunks(256);
+//     for chunk in chunks {
+//         // TODO: bottleneck.
+//         let mut p = match priv_key.decrypt(Pkcs1v15Encrypt, &chunk[..chunk.len()]) {
+//             Ok(e) => e,
+//             Err(_) => {
+//                 continue;
+//             }
+//         };
+//
+//         packet.append(&mut p);
+//     }
+//
+//     return Ok(packet);
+// }
+//
+// fn encrypt(data: Vec<u8>, pub_key: &RsaPublicKey) -> Result<Vec<u8>, rsa::Error> {
+//     let mut buffer: Vec<u8> = Vec::new();
+//     let chunks = data[..data.len()].chunks(128);
+//     for chunk in chunks {
+//         let mut rng = rand::thread_rng();
+//         let enc = pub_key.encrypt(&mut rng, Pkcs1v15Encrypt, &chunk[..chunk.len()]);
+//         if let Err(e) = enc {
+//             return Err(e);
+//         }
+//
+//         buffer.append(&mut enc.unwrap());
+//     }
+//
+//     return Ok(buffer);
+// }
