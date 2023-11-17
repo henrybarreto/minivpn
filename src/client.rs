@@ -98,9 +98,6 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
         .trim_matches(char::from(0));
 
     let peer = rsa::RsaPrivateKey::from_pkcs1_pem(&peer_str).unwrap();
-    peer.to_public_key()
-        .write_pkcs1_pem_file("me.pem", LineEnding::LF)
-        .unwrap();
 
     let mut peers = HashMap::<Ipv4Addr, rsa::RsaPublicKey>::new();
     for p in peers_str {

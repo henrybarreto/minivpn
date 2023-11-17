@@ -119,6 +119,13 @@ pub struct Received {
     pub data: Vec<u8>,
 }
 
+#[derive(Debug, Clone)]
+pub struct Sent {
+    pub wrote: usize,
+    pub addr: SocketAddr,
+    pub data: Vec<u8>,
+}
+
 async fn recv(socket: &UdpSocket) -> Result<Received, Error> {
     let mut data: Vec<u8> = vec![0; 1000000];
     let (read, addr) = match socket.recv_from(&mut data).await {
@@ -129,6 +136,20 @@ async fn recv(socket: &UdpSocket) -> Result<Received, Error> {
     };
 
     return Ok(Received { read, addr, data });
+}
+
+async fn send(socket: &UdpSocket, addr: SocketAddr, data: Vec<u8>) -> Result<Sent, Error> {
+    let sent = socket.send_to(&data[..data.len()], addr).await;
+    if let Err(e) = sent {
+        error!("Error sending packet");
+        dbg!(&e);
+
+        return Err(e);
+    }
+
+    let wrote = sent.unwrap();
+
+    return Ok(Sent { wrote, addr, data });
 }
 
 async fn worker(id: u8, socket: &UdpSocket, networks: Arc<RwLock<HashMap<Ipv4Addr, Peer>>>) {
@@ -190,28 +211,15 @@ async fn worker(id: u8, socket: &UdpSocket, networks: Arc<RwLock<HashMap<Ipv4Add
         };
 
         let to = got.unwrap();
-        match socket
-            .send_to(&packet.data[..packet.data.len()], to.addr)
-            .await
-        {
-            Ok(send) => {
-                if send == 0 {
-                    error!("Nothing was sent");
-                    warn!("Removing {} from networks", &destination);
-                    //networks.remove(&destination);
-                }
-
-                info!(
-                    "Sent {} bytes from {} to {} on worker {}",
-                    send, source, destination, id
-                );
-            }
-            Err(e) => {
-                error!("Error sending packet");
-                dbg!(e);
-                // When the destination is not reachable, remove it from the list.
-                //networks.remove(&destination);
-            }
+        let data = send(&socket, to.addr, packet.data).await;
+        if let Err(_) = data {
+            error!("Error sending packet");
+            continue;
         }
+
+        let sent = data.unwrap();
+        debug!("Data sent to {} on worker {}", sent.addr, id);
+
+        info!("Packet sent from {} to {}", source, destination);
     }
 }
