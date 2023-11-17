@@ -1,4 +1,5 @@
 use clap::{Arg, Command};
+use rsa::pkcs1::{EncodeRsaPrivateKey, EncodeRsaPublicKey};
 
 mod client;
 mod server;
@@ -42,6 +43,19 @@ async fn main() {
                 ),
         )
         .subcommand(Command::new("server").about("Start a server"))
+        .subcommand(
+            Command::new("generate")
+                .about("Generate a new keypair")
+                .arg(
+                    Arg::new("force")
+                        .long("force")
+                        .short('f')
+                        .help("Force generation of new keypair")
+                        .value_name("FORCE")
+                        .value_parser(clap::value_parser!(bool))
+                        .default_value("false"),
+                ),
+        )
         .subcommand(Command::new("info").about("Show information about the connection"))
         .get_matches();
 
@@ -56,8 +70,42 @@ async fn main() {
         Some(("server", _)) => {
             server::serve().await;
         }
+        Some(("generate", command)) => {
+            let force = command.get_one::<bool>("force").unwrap();
+
+            if generate_keypair(*force).await {
+                println!("Generated keypair");
+            } else {
+                println!("Keypair already exists");
+            }
+        }
         _ => {
             println!("No subcommand was used");
         }
     }
+}
+
+async fn generate_keypair(force: bool) -> bool {
+    if !force {
+        if std::path::Path::new("./peer.toml").exists() {
+            println!("Private key already exists");
+            return false;
+        }
+
+        if std::path::Path::new("./public.toml").exists() {
+            println!("Public key already exists");
+            return false;
+        }
+    }
+
+    let private = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
+    private
+        .write_pkcs1_pem_file("./peer.toml", rsa::pkcs8::LineEnding::LF)
+        .unwrap();
+    let public = private.to_public_key();
+    public
+        .write_pkcs1_pem_file("./public.toml", rsa::pkcs8::LineEnding::LF)
+        .unwrap();
+
+    return true;
 }
