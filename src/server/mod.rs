@@ -10,12 +10,19 @@ use std::{
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 
+mod auther;
+
 use crate::client::IP;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Peer {
     addr: SocketAddr,
 }
+
+const AUTH_SERVER: &str = "0.0.0.0";
+const AUTH_PORT: u16 = 1120;
+const ROUTER_SERVER: &str = "0.0.0.0";
+const ROUTER_PORT: u16 = 9807;
 
 pub async fn serve() {
     info!("Starting Obirt");
@@ -25,15 +32,19 @@ pub async fn serve() {
 
     let cnetworks = mnetworks.clone();
 
-    let socket = UdpSocket::bind("0.0.0.0:1120").await.unwrap();
+    let socket = UdpSocket::bind(format!("{}:{}", AUTH_SERVER, AUTH_PORT))
+        .await
+        .unwrap();
     let msocket = Arc::new(socket);
     info!("Listening for auth on 1120");
 
-    tokio::spawn(auther(msocket.clone(), cnetworks));
+    tokio::spawn(auther::auther(msocket, cnetworks));
 
     let cnetworks = mnetworks.clone();
 
-    let socket = UdpSocket::bind("0.0.0.0:9807").await.unwrap();
+    let socket = UdpSocket::bind(format!("{}:{}", ROUTER_SERVER, ROUTER_PORT))
+        .await
+        .unwrap();
 
     info!("Listening for packets on 9807");
     info!("Ready to route packets");
@@ -48,68 +59,6 @@ pub async fn serve() {
         worker(6, &socket, cnetworks.clone()),
         worker(7, &socket, cnetworks.clone()),
     );
-}
-
-async fn auther(socket: Arc<UdpSocket>, networks: Arc<RwLock<HashMap<Ipv4Addr, Peer>>>) {
-    let mut ip_to_mac = HashMap::<mac_address::MacAddress, Ipv4Addr>::new();
-
-    let mut counter = 0;
-    loop {
-        let mut buffer = [0; 4096];
-        let (read, addr) = match socket.recv_from(&mut buffer).await {
-            Ok((read, addr)) => (read, addr),
-            Err(_) => continue,
-        };
-
-        info!("New peer request from {}", addr);
-
-        let mac = match bincode::deserialize::<mac_address::MacAddress>(&buffer[..read]) {
-            Ok(mac) => mac,
-            Err(_) => {
-                error!("Error deserializing MAC address");
-
-                continue;
-            }
-        };
-
-        info!("Received peer request from MAC {}", mac);
-
-        if let Some(ip) = ip_to_mac.get(&mac) {
-            info!("Peer already registered");
-            let peer = Ipv4Net::new(ip.clone(), 24).unwrap();
-
-            let mut networks = networks.write().await;
-            networks.insert(ip.clone(), Peer { addr });
-            drop(networks);
-
-            info!("Sending peer address to {}", addr);
-            socket
-                .send_to(&bincode::serialize(&peer).unwrap(), addr)
-                .await
-                .unwrap();
-
-            info!("Added peer: {} as {}", addr, ip);
-        } else {
-            info!("New peer to register");
-            let peer = Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 100 + counter), 24).unwrap();
-
-            let mut networks = networks.write().await;
-            networks.insert(peer.addr(), Peer { addr });
-            drop(networks);
-
-            ip_to_mac.insert(mac, peer.addr());
-
-            info!("Sending peer address to {}", addr);
-            socket
-                .send_to(&bincode::serialize(&peer).unwrap(), addr)
-                .await
-                .unwrap();
-
-            info!("Added peer: {} as {}", addr, peer.addr());
-
-            counter += 1;
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
