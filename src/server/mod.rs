@@ -45,19 +45,20 @@ pub async fn serve() {
     let socket = UdpSocket::bind(format!("{}:{}", ROUTER_SERVER, ROUTER_PORT))
         .await
         .unwrap();
+    let sockets = Arc::new(socket);
 
     info!("Listening for packets on 9807");
     info!("Ready to route packets");
 
     tokio::join!(
-        worker(0, &socket, cnetworks.clone()),
-        worker(1, &socket, cnetworks.clone()),
-        worker(2, &socket, cnetworks.clone()),
-        worker(3, &socket, cnetworks.clone()),
-        worker(4, &socket, cnetworks.clone()),
-        worker(5, &socket, cnetworks.clone()),
-        worker(6, &socket, cnetworks.clone()),
-        worker(7, &socket, cnetworks.clone()),
+        worker(0, sockets.clone(), cnetworks.clone()),
+        worker(1, sockets.clone(), cnetworks.clone()),
+        worker(2, sockets.clone(), cnetworks.clone()),
+        worker(3, sockets.clone(), cnetworks.clone()),
+        worker(4, sockets.clone(), cnetworks.clone()),
+        worker(5, sockets.clone(), cnetworks.clone()),
+        worker(6, sockets.clone(), cnetworks.clone()),
+        worker(7, sockets.clone(), cnetworks.clone()),
     );
 }
 
@@ -101,10 +102,11 @@ async fn send(socket: &UdpSocket, addr: SocketAddr, data: Vec<u8>) -> Result<Sen
     return Ok(Sent { wrote, addr, data });
 }
 
-async fn worker(id: u8, socket: &UdpSocket, networks: Arc<RwLock<HashMap<Ipv4Addr, Peer>>>) {
+async fn worker(id: u8, socket: Arc<UdpSocket>, networks: Arc<RwLock<HashMap<Ipv4Addr, Peer>>>) {
     loop {
         trace!("Packet router cycle {}", id);
 
+        trace!("Waiting for packet on worker {}", id);
         let buffer = recv(&socket).await;
         if let Err(_) = buffer {
             error!("Error receiving packet");
@@ -118,57 +120,62 @@ async fn worker(id: u8, socket: &UdpSocket, networks: Arc<RwLock<HashMap<Ipv4Add
             data.addr, data.read, id
         );
 
-        let packet: IP = match bincode::deserialize(&data.data) {
-            Ok(packet) => packet,
-            Err(e) => {
-                error!("Error deserializing packet");
-                dbg!(e);
-                continue;
+        let socket = socket.clone();
+        let networks = networks.clone();
+        tokio::spawn(async move {
+            let packet: IP = match bincode::deserialize(&data.data) {
+                Ok(packet) => packet,
+                Err(e) => {
+                    error!("Error deserializing packet");
+                    dbg!(e);
+
+                    return;
+                }
+            };
+
+            let source = packet.source;
+            let destination = packet.destination;
+            debug!("Packet is IP from {} to {}", source, destination);
+
+            let networks = networks.read().await;
+
+            let got = networks.get(&source);
+            if let None = got {
+                error!("Packet source is not in networks");
+                dbg!(&source);
+
+                return;
+            };
+
+            let from = got.unwrap();
+
+            if from.addr != data.addr {
+                error!("Packet source does not match source address");
+                dbg!(&from.addr);
+                dbg!(&data.addr);
+
+                return;
             }
-        };
 
-        let source = packet.source;
-        let destination = packet.destination;
-        debug!("Packet is IP from {} to {}", source, destination);
+            let got = networks.get(&destination);
+            if let None = got {
+                error!("Packet destination is not in networks");
+                dbg!(&destination);
 
-        let networks = networks.read().await;
+                return;
+            };
 
-        let got = networks.get(&source);
-        if let None = got {
-            error!("Packet source is not in networks");
-            dbg!(&source);
+            let to = got.unwrap();
+            let data = send(&socket, to.addr, packet.data).await;
+            if let Err(_) = data {
+                error!("Error sending packet");
+                return;
+            }
 
-            continue;
-        };
+            let sent = data.unwrap();
+            debug!("Data sent to {} on worker {}", sent.addr, id);
 
-        let from = got.unwrap();
-
-        if from.addr != data.addr {
-            error!("Packet source does not match source address");
-            dbg!(&from.addr);
-            dbg!(&data.addr);
-
-            continue;
-        }
-
-        let got = networks.get(&destination);
-        if let None = got {
-            error!("Packet destination is not in networks");
-            dbg!(&destination);
-
-            continue;
-        };
-
-        let to = got.unwrap();
-        let data = send(&socket, to.addr, packet.data).await;
-        if let Err(_) = data {
-            error!("Error sending packet");
-            continue;
-        }
-
-        let sent = data.unwrap();
-        debug!("Data sent to {} on worker {}", sent.addr, id);
-
-        info!("Packet sent from {} to {}", source, destination);
+            info!("Packet sent from {} to {}", source, destination);
+        });
     }
 }

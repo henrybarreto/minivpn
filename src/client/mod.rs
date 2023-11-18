@@ -101,10 +101,10 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
     let reader = reader.clone();
     tokio::spawn(async move {
         tokio::join!(
-            io::output(0, &socket, reader.clone(), &peers),
-            io::output(1, &socket, reader.clone(), &peers),
-            io::output(2, &socket, reader.clone(), &peers),
-            io::output(3, &socket, reader.clone(), &peers)
+            io::output(0, socket.clone(), reader.clone(), &peers),
+            io::output(1, socket.clone(), reader.clone(), &peers),
+            io::output(2, socket.clone(), reader.clone(), &peers),
+            io::output(3, socket.clone(), reader.clone(), &peers)
         );
     });
 

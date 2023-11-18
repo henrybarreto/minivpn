@@ -23,7 +23,7 @@ pub async fn input(
     loop {
         trace!("Receiving cycle {}", id);
 
-        let mut buffer: Vec<u8> = vec![0; 1000000];
+        let mut buffer: Vec<u8> = vec![0; 4096];
         let recved = socket.recv(&mut buffer).await;
         let read = match recved {
             Ok(read) => read,
@@ -36,45 +36,49 @@ pub async fn input(
 
         info!("Received {} bytes using {}", read, id);
 
-        let packet = match data::decrypt(buffer[..read].to_vec(), private_key) {
-            Ok(e) => e,
-            Err(e) => {
-                error!("Failed to decrypt packet due to {}", e);
+        let interface = interface.clone();
+        let private_key = private_key.clone();
+        tokio::spawn(async move {
+            let packet = match data::decrypt(buffer[..read].to_vec(), &private_key) {
+                Ok(e) => e,
+                Err(e) => {
+                    error!("Failed to decrypt packet due to {}", e);
 
-                continue;
-            }
-        };
+                    return;
+                }
+            };
 
-        if let Ok(_ip) = packet::ip::v4::Packet::new(&packet[..packet.len()]) {
-            let mut interface = interface.lock().await;
-            let to_write = interface.write(&packet[..packet.len()]);
-            if let Err(e) = to_write {
-                error!("Failed to write packet due to {}", e);
+            if let Ok(_ip) = packet::ip::v4::Packet::new(&packet[..packet.len()]) {
+                let mut interface = interface.lock().await;
+                let to_write = interface.write(&packet[..packet.len()]);
+                if let Err(e) = to_write {
+                    error!("Failed to write packet due to {}", e);
 
+                    drop(interface);
+                    return;
+                }
                 drop(interface);
-                continue;
+
+                let wrote = to_write.unwrap();
+                info!("Wrote {} bytes using {}", wrote, id);
+            } else {
+                info!("Packet read from socket is not IP");
             }
-
-            drop(interface);
-
-            let wrote = to_write.unwrap();
-            info!("Wrote {} bytes using {}", wrote, id);
-        } else {
-            info!("Packet read from socket is not IP");
-        }
+        });
     }
 }
 
 pub async fn output(
     id: usize,
-    socket: &UdpSocket,
+    socket: Arc<UdpSocket>,
     interface: Arc<Mutex<Reader>>,
     peers: &HashMap<net::Ipv4Addr, rsa::RsaPublicKey>,
 ) {
+    let mut buffer: Vec<u8> = vec![0; 4096];
+
     loop {
         trace!("Sending cycle {}", id);
 
-        let mut buffer: Vec<u8> = vec![0; 1000000];
         let mut interface = interface.lock().await;
         let read = match interface.read(&mut buffer) {
             Ok(read) => read,
