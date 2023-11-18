@@ -2,7 +2,6 @@ use bincode;
 use ipnet::Ipv4Net;
 use log::{debug, error, info, trace};
 use rsa::pkcs1::{DecodeRsaPrivateKey, DecodeRsaPublicKey, EncodeRsaPublicKey};
-use rsa::pkcs8::LineEnding;
 use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -89,7 +88,7 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
     )
     .unwrap();
 
-    let mut file = File::open("./peer.toml").await.unwrap();
+    let mut file = File::open("./private.txt").await.unwrap();
     let mut buffer = [0; 4096];
     file.read(&mut buffer).await.unwrap();
 
