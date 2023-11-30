@@ -1,5 +1,4 @@
 use clap::{Arg, Command};
-use rsa::pkcs1::{EncodeRsaPrivateKey, EncodeRsaPublicKey};
 
 mod client;
 mod generation;
@@ -66,10 +65,10 @@ async fn main() {
             let port = command.get_one::<String>("port").unwrap();
             let interface = command.get_one::<String>("interface").unwrap();
 
-            client::connect(server, port, interface).await;
+            client::connect::connect(server, port, interface).await;
         }
         Some(("server", _)) => {
-            server::serve().await;
+            server::server::serve().await;
         }
         Some(("generate", command)) => {
             let force = command.get_one::<bool>("force").unwrap();

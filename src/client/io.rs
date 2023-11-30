@@ -6,10 +6,7 @@ use std::{
 };
 
 use log::{debug, error, info, trace};
-use tokio::{
-    net::UdpSocket,
-    sync::{Mutex, RwLock},
-};
+use tokio::{net::UdpSocket, sync::Mutex};
 use tun::platform::posix::{Reader, Writer};
 
 use crate::client::{data, IP};

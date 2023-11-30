@@ -4,7 +4,7 @@ use ipnet::Ipv4Net;
 use log::{error, info};
 use tokio::{net::UdpSocket, sync::RwLock};
 
-use super::Peer;
+use super::server::Peer;
 
 pub async fn auther(socket: Arc<UdpSocket>, networks: Arc<RwLock<HashMap<Ipv4Addr, Peer>>>) {
     let mut ip_to_mac = HashMap::<mac_address::MacAddress, Ipv4Addr>::new();
