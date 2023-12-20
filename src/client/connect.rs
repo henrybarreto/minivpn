@@ -1,7 +1,8 @@
 use bincode;
 use ipnet::Ipv4Net;
 use log::{error, info, trace};
-use std::sync::Arc;
+use rsa::{pkcs1::DecodeRsaPublicKey, RsaPublicKey};
+use std::{collections::HashMap, fs, io::Read, net::Ipv4Addr, sync::Arc};
 use tokio::{net::UdpSocket, sync::Mutex};
 
 use crate::client::{io, loader};
@@ -68,8 +69,22 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
 
     info!("Connected to router");
 
-    let peers = loader::peers().await;
+    let mut peers: HashMap<Ipv4Addr, RsaPublicKey> = loader::peers().await;
+
+    let mut buffer = [0; 4096];
+    let mut file = fs::File::open("./public.txt").unwrap();
+    file.read(&mut buffer).unwrap();
+
+    let public_str = std::str::from_utf8(&buffer[..])
+        .unwrap()
+        .trim_matches(char::from(0));
+
+    let public = rsa::RsaPublicKey::from_pkcs1_pem(&public_str).unwrap();
     let private = loader::private().await;
+
+    info!("Private and public keys loaded");
+
+    peers.insert(peer.addr(), public);
 
     let socket = sockets.clone();
     let writer = writer.clone();
