@@ -15,10 +15,12 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
         panic!("Failed to bind");
     };
 
-    info!("Registering peer on the server");
+    info!("Connected to server");
+
+    trace!("Registering peer on the server");
 
     let mut buffer = [0; 4096];
-    info!("Sending MAC address to server");
+    trace!("Sending MAC address to server");
     let mac = mac_address::get_mac_address().unwrap();
     socket
         .send_to(
@@ -28,9 +30,9 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
         .await
         .unwrap();
 
-    info!("Sent MAC address to server");
+    trace!("Sent MAC address to server");
 
-    info!("Waiting for peer registration response");
+    trace!("Waiting for peer registration response");
     let (read, _) = socket.recv_from(&mut buffer).await.unwrap();
 
     let bytes = bincode::deserialize(&buffer[..read]);
@@ -59,7 +61,7 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
     let router = format!("{}:{}", server, port);
     dbg!(&router);
 
-    info!("Connecting to router");
+    trace!("Connecting to router");
 
     if let Err(e) = socket.connect(router).await {
         panic!("Failed to connect to router due {}", e);
