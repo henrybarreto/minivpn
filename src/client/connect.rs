@@ -15,9 +15,11 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
         panic!("Failed to bind");
     };
 
-    info!("Connected to server");
+    info!("Binded to {}", socket.local_addr().unwrap());
 
     trace!("Registering peer on the server");
+
+    info!("Sending information to server");
 
     let mut buffer = [0; 4096];
     trace!("Sending MAC address to server");
