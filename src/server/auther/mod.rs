@@ -1,12 +1,27 @@
-use std::{collections::HashMap, net::Ipv4Addr, sync::Arc};
+use std::{collections::HashMap, net::Ipv4Addr};
 
 use ipnet::Ipv4Net;
 use log::{error, info};
-use tokio::{net::UdpSocket, sync::RwLock};
+use tokio::net::UdpSocket;
 
-use super::server::Peer;
+use crate::server::entities::{Address, Peer, Peers};
 
-pub async fn auther(socket: Arc<UdpSocket>, networks: Arc<RwLock<HashMap<Ipv4Addr, Peer>>>) {
+/// Auth server address.
+const AUTH_SERVER: &str = "0.0.0.0";
+/// Auth port address.
+const AUTH_PORT: u16 = 1120;
+
+pub async fn start(peers: &impl Peers) {
+    info!("Initing Obirt authenticator");
+
+    let address = Address::new(AUTH_SERVER, AUTH_PORT);
+
+    let socket = UdpSocket::bind(address.to_string()).await.unwrap();
+    info!(
+        "Obirt authenticator listening for packets on {}",
+        address.port
+    );
+
     let mut ip_to_mac = HashMap::<mac_address::MacAddress, Ipv4Addr>::new();
 
     let mut counter = 0;
@@ -34,9 +49,7 @@ pub async fn auther(socket: Arc<UdpSocket>, networks: Arc<RwLock<HashMap<Ipv4Add
             info!("Peer already registered");
             let peer = Ipv4Net::new(ip.clone(), 24).unwrap();
 
-            let mut networks = networks.write().await;
-            networks.insert(ip.clone(), Peer { addr });
-            drop(networks);
+            peers.set(ip.clone(), Peer { addr });
 
             info!("Sending peer address to {}", addr);
             socket
@@ -49,9 +62,7 @@ pub async fn auther(socket: Arc<UdpSocket>, networks: Arc<RwLock<HashMap<Ipv4Add
             info!("New peer to register");
             let peer = Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 100 + counter), 24).unwrap();
 
-            let mut networks = networks.write().await;
-            networks.insert(peer.addr(), Peer { addr });
-            drop(networks);
+            peers.set(peer.addr(), Peer { addr });
 
             ip_to_mac.insert(mac, peer.addr());
 

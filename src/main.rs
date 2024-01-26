@@ -1,8 +1,10 @@
+use obirt::server::entities::MemPeers;
+
 use clap::{Arg, Command};
 use rsa::pkcs1::{EncodeRsaPrivateKey, EncodeRsaPublicKey};
 
-mod client;
-mod server;
+use obirt::client;
+use obirt::server::{auther, switch};
 
 #[tokio::main]
 async fn main() {
@@ -68,7 +70,9 @@ async fn main() {
             client::connect::connect(server, port, interface).await;
         }
         Some(("server", _)) => {
-            server::server::serve().await;
+            let peers = MemPeers::default();
+
+            tokio::join!(auther::start(&peers), switch::start(&peers));
         }
         Some(("generate", command)) => {
             let force = command.get_one::<bool>("force").unwrap();

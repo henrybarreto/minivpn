@@ -1,2 +1,3 @@
 pub mod auther;
-pub mod server;
+pub mod entities;
+pub mod switch;
