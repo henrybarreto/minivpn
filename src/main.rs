@@ -4,7 +4,7 @@ use clap::{Arg, Command};
 use rsa::pkcs1::{EncodeRsaPrivateKey, EncodeRsaPublicKey};
 
 use obirt::client;
-use obirt::server::{auther, switch};
+use obirt::server::{auther, router};
 
 #[tokio::main]
 async fn main() {
@@ -72,7 +72,7 @@ async fn main() {
         Some(("server", _)) => {
             let peers = MemPeers::default();
 
-            tokio::join!(auther::start(&peers), switch::start(&peers));
+            tokio::join!(auther::start(&peers), router::start(&peers));
         }
         Some(("generate", command)) => {
             let force = command.get_one::<bool>("force").unwrap();

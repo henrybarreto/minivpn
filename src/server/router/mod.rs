@@ -7,24 +7,23 @@ use worker::worker;
 
 use crate::server::entities::{Address, Peers};
 
-/// Switch server address.
-const SWITCH_SERVER: &str = "0.0.0.0";
-/// Switch port address.
-const SWITCH_PORT: u16 = 9807;
+const ROUTER_SERVER: &str = "0.0.0.0";
+const ROUTER_PORT: u16 = 9807;
 
-/// start the Obirt switch.
+/// start the Obirt router.
 ///
-/// The switch redirects the IP packages to its destinations, if it exist.
+/// The router redirects the IP packages to its destinations, if it exist.
 pub async fn start(peers: &impl Peers) {
-    info!("Initing Obirt switch");
+    info!("Initing Obirt router");
 
-    let address = Address::new(SWITCH_SERVER, SWITCH_PORT);
+    let address = Address::new(ROUTER_SERVER, ROUTER_PORT);
 
     let socket = UdpSocket::bind(address.to_string()).await.unwrap();
-    info!("Obirt switch listening for packets on {}", address.port);
+    info!("Obirt router listening for packets on {}", address.port);
 
-    trace!("Starting workers");
+    trace!("Starting routers workers");
 
+    // TODO: create workers based on CPU.
     tokio::join!(
         worker(0, &socket, peers),
         worker(1, &socket, peers),
@@ -36,5 +35,5 @@ pub async fn start(peers: &impl Peers) {
         worker(7, &socket, peers),
     );
 
-    info!("Stopping Obirt switch")
+    info!("Stopping Obirt router")
 }

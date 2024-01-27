@@ -8,11 +8,6 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Peer {
-    pub addr: SocketAddr,
-}
-
 pub struct Address {
     pub server: String,
     pub port: u16,
@@ -33,12 +28,17 @@ impl ToString for Address {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Peer {
+    pub addr: SocketAddr,
+}
+
 /// A trait for create ways of managing Peers.
 pub trait Peers {
     /// set inserts a Peer for an IP.
     fn set(&self, ip: Ipv4Addr, peer: Peer) -> impl Future<Output = Option<Peer>> + Send;
     /// get a Peer from an IP.
-    fn get(&self, ip: &Ipv4Addr) -> impl Future<Output = Option<Peer>> + Send;
+    fn get(&self, ip: Ipv4Addr) -> impl Future<Output = Option<Peer>> + Send;
 }
 
 /// In memory Peer's manager.
@@ -53,9 +53,9 @@ impl Peers for MemPeers {
         return writer.insert(ip, peer);
     }
 
-    async fn get(&self, ip: &Ipv4Addr) -> Option<Peer> {
+    async fn get(&self, ip: Ipv4Addr) -> Option<Peer> {
         let reader = self.peers.read().await;
-        let got = reader.get(ip)?;
+        let got = reader.get(&ip)?;
 
         return Some(got.clone());
     }

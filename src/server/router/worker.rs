@@ -95,7 +95,7 @@ pub async fn worker(id: u8, socket: &UdpSocket, peers: &impl Peers) {
 
         // let networks = peers.read().await;
 
-        let got = peers.get(&source).await;
+        let got = peers.get(source).await;
         if let None = got {
             error!("Peer source is not in networks");
             dbg!(&source);
@@ -115,7 +115,7 @@ pub async fn worker(id: u8, socket: &UdpSocket, peers: &impl Peers) {
             continue;
         }
 
-        let got = peers.get(&destination).await;
+        let got = peers.get(destination).await;
         if let None = got {
             error!("Peer destination is not in networks");
             dbg!(&destination);

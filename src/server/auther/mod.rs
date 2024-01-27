@@ -6,9 +6,7 @@ use tokio::net::UdpSocket;
 
 use crate::server::entities::{Address, Peer, Peers};
 
-/// Auth server address.
 const AUTH_SERVER: &str = "0.0.0.0";
-/// Auth port address.
 const AUTH_PORT: u16 = 1120;
 
 pub async fn start(peers: &impl Peers) {
@@ -49,7 +47,7 @@ pub async fn start(peers: &impl Peers) {
             info!("Peer already registered");
             let peer = Ipv4Net::new(ip.clone(), 24).unwrap();
 
-            peers.set(ip.clone(), Peer { addr });
+            peers.set(ip.clone(), Peer { addr }).await;
 
             info!("Sending peer address to {}", addr);
             socket
@@ -62,7 +60,7 @@ pub async fn start(peers: &impl Peers) {
             info!("New peer to register");
             let peer = Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 100 + counter), 24).unwrap();
 
-            peers.set(peer.addr(), Peer { addr });
+            peers.set(peer.addr(), Peer { addr }).await;
 
             ip_to_mac.insert(mac, peer.addr());
 
