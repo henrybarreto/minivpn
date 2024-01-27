@@ -6,7 +6,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc::Permit, RwLock};
 
 pub struct Address {
     pub server: String,
@@ -31,6 +31,12 @@ impl ToString for Address {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Peer {
     pub addr: SocketAddr,
+}
+
+impl Peer {
+    pub fn new(addr: SocketAddr) -> Self {
+        return Peer { addr };
+    }
 }
 
 /// A trait for create ways of managing Peers.

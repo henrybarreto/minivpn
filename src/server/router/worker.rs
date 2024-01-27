@@ -93,8 +93,6 @@ pub async fn worker(id: u8, socket: &UdpSocket, peers: &impl Peers) {
         let destination = packet.destination;
         debug!("Packet is IP from {} to {}", source, destination);
 
-        // let networks = peers.read().await;
-
         let got = peers.get(source).await;
         if let None = got {
             error!("Peer source is not in networks");
