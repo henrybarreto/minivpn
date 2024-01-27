@@ -64,15 +64,15 @@ pub async fn worker(id: u8, socket: &UdpSocket, peers: &impl Peers) {
         trace!("Packet router cycle {}", id);
 
         trace!("Waiting for packet on worker {}", id);
-        let buffer = recv(&socket).await;
-        if let Err(e) = buffer {
+        let received = recv(&socket).await;
+        if let Err(e) = received {
             error!("Error receiving packet");
             dbg!(e);
 
             continue;
         }
 
-        let data = buffer.unwrap();
+        let data = received.unwrap();
 
         debug!(
             "Packet from {} reading {} on worker {}",
