@@ -67,7 +67,7 @@ async fn main() {
             let port = command.get_one::<String>("port").unwrap();
             let interface = command.get_one::<String>("interface").unwrap();
 
-            client::connect::connect(server, port, interface).await;
+            client::connect(server, port, interface).await;
         }
         Some(("server", _)) => {
             let peers = MemPeers::default();
