@@ -6,7 +6,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc::Permit, RwLock};
+use tokio::sync::RwLock;
 
 pub struct Address {
     pub server: String,

@@ -1,7 +1,7 @@
 [package]
 name = "obirt"
-description = "A simple VPN"
-keywords = ["vpn", "simple", "easy", "fast", "udp"]
+description = "A simple F2F VPN"
+keywords = ["vpn", "simple", "easy", "fast", "udp", "f2f"]
 authors = ["Henry Barreto <me@henrybarreto.dev"]
 version = "0.1.0"
 edition = "2021"

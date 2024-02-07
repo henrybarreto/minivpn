@@ -20,7 +20,8 @@ pub async fn input(
     loop {
         trace!("Receiving cycle {}", id);
 
-        let mut buffer: Vec<u8> = vec![0; 4096];
+        let mut buffer = [0 as u8; 4096];
+
         let recved = socket.recv(&mut buffer).await;
         let read = match recved {
             Ok(read) => read,
@@ -67,11 +68,11 @@ pub async fn input(
 
 pub async fn output(
     id: usize,
-    socket: Arc<UdpSocket>,
+    socket: &UdpSocket,
     interface: Arc<Mutex<Reader>>,
     peers: &HashMap<net::Ipv4Addr, rsa::RsaPublicKey>,
 ) {
-    let mut buffer: Vec<u8> = vec![0; 4096];
+    let mut buffer = [0 as u8; 4096];
 
     loop {
         trace!("Sending cycle {}", id);
