@@ -12,7 +12,10 @@ use std::{
 use tokio::{net::UdpSocket, sync::Mutex};
 use tun::platform::posix::{Reader, Writer};
 
-use crate::client::{io, loader};
+use crate::{
+    client::{io, loader},
+    server::auther,
+};
 
 async fn recv<'a, T>(
     socket: &'a UdpSocket,
@@ -101,24 +104,92 @@ pub async fn try_auth(socket: &UdpSocket) -> Result<Ipv4Net, Error> {
     return Ok(peer);
 }
 
-pub async fn create_interface(
-    interface: &str,
-    peer: Ipv4Net,
-) -> (Arc<Mutex<Reader>>, Arc<Mutex<Writer>>) {
-    let mut config = tun::Configuration::default();
-    config
-        .name(interface)
-        .address(peer.addr())
-        .netmask(peer.netmask())
-        .up();
+struct Interface {
+    reader: Arc<Mutex<Reader>>,
+    writer: Arc<Mutex<Writer>>,
+}
 
-    let interface = tun::create(&config).unwrap();
+impl Interface {
+    /// Creates a new network interface using name and peer as its address.
+    pub fn new(name: &str, peer: Ipv4Net) -> Self {
+        let mut config = tun::Configuration::default();
+        config
+            .name(name)
+            .address(peer.addr())
+            .netmask(peer.netmask())
+            .up();
 
-    let (reader, writer) = interface.split();
-    let reader = Arc::new(Mutex::new(reader));
-    let writer = Arc::new(Mutex::new(writer));
+        let interface = tun::create(&config).unwrap();
 
-    return (reader, writer);
+        let (reader, writer) = interface.split();
+        let reader = Arc::new(Mutex::new(reader));
+        let writer = Arc::new(Mutex::new(writer));
+
+        return Interface { reader, writer };
+    }
+}
+
+struct Authenticator<'a> {
+    socket: &'a UdpSocket,
+    address: String,
+    port: String,
+}
+
+impl<'a> Authenticator<'a> {
+    pub fn new(socket: &'a UdpSocket, address: String, port: String) -> Self {
+        return Authenticator {
+            socket,
+            address,
+            port,
+        };
+    }
+
+    pub async fn connect(&'a self) -> Result<bool, Error> {
+        let auther = format!("{}:{}", self.address, self.port);
+        dbg!(&auther);
+
+        if let Err(_) = self.socket.connect(auther).await {
+            return Err(Error::new(
+                std::io::ErrorKind::Other,
+                "failed to connect to the authentication server",
+            ));
+        }
+
+        return Ok(true);
+    }
+
+    pub async fn authenticate(&self) -> Result<Ipv4Net, Error> {
+        trace!("Registering peer on the server");
+
+        info!("Sending information to server");
+
+        let mut buffer = [0; 4096];
+
+        trace!("Sending MAC address to server");
+        let mac = mac_address::get_mac_address().unwrap().unwrap();
+
+        let socket = self.socket;
+
+        if let Err(e) = send::<mac_address::MacAddress>(&socket, &mac).await {
+            error!("failed to send the MAC address: {}", e);
+
+            return Err(e);
+        }
+
+        trace!("Sent MAC address to server");
+
+        trace!("Waiting for peer registration response");
+        let received = recv::<Ipv4Net>(&socket, &mut buffer).await;
+        if let Err(e) = received {
+            error!("failed to receive the peer address");
+
+            return Err(e);
+        }
+
+        let (_, _, peer) = received.unwrap();
+
+        return Ok(peer);
+    }
 }
 
 pub async fn connect(server: &str, port: &str, interface: &str) {
@@ -132,23 +203,21 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
 
     info!("Binded to {}", socket.local_addr().unwrap());
 
-    let auther = format!("{}:{}", server, port);
-    dbg!(&auther);
-
-    if let Err(e) = socket.connect(auther).await {
-        panic!("Failed to connect to router due {}", e);
+    let authenticator = Authenticator::new(&socket, server.to_string(), String::from("1120"));
+    if let Err(e) = authenticator.connect().await {
+        panic!("failed to connect to the authentication server: {}", e);
     }
 
-    let t = try_auth(&socket).await;
-    if let Err(e) = t {
-        panic!("failed to auth the client: {}", e);
+    let authentication = authenticator.authenticate().await;
+    if let Err(e) = authentication {
+        panic!("failed to authenticate on the authentication server: {}", e);
     }
 
-    let peer = t.unwrap();
+    let peer = authentication.unwrap();
 
     info!("Peer registered as {}", peer);
 
-    let (reader, writer) = create_interface(interface, peer).await;
+    let interface = Interface::new(interface, peer);
 
     let router = format!("{}:{}", server, port);
     dbg!(&router);
@@ -180,27 +249,28 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
 
     peers.insert(peer.addr(), public);
 
-    let inputer = sockets.clone();
+    let input = sockets.clone();
 
-    let writer = writer.clone();
+    // NOTICE: this way to "increase" concurrency isn't the ideal.
+    let writer = interface.writer.clone();
     tokio::spawn(async move {
         tokio::join!(
-            io::input(0, &inputer, writer.clone(), &private),
-            io::input(1, &inputer, writer.clone(), &private),
-            io::input(2, &inputer, writer.clone(), &private),
-            io::input(3, &inputer, writer.clone(), &private)
+            io::input(0, &input, writer.clone(), &private),
+            io::input(1, &input, writer.clone(), &private),
+            io::input(2, &input, writer.clone(), &private),
+            io::input(3, &input, writer.clone(), &private)
         );
     });
 
-    let outputer = sockets.clone();
+    let output = sockets.clone();
 
-    let reader = reader.clone();
+    let reader = interface.reader.clone();
     tokio::spawn(async move {
         tokio::join!(
-            io::output(0, &outputer, reader.clone(), &peers),
-            io::output(1, &outputer, reader.clone(), &peers),
-            io::output(2, &outputer, reader.clone(), &peers),
-            io::output(3, &outputer, reader.clone(), &peers)
+            io::output(0, &output, reader.clone(), &peers),
+            io::output(1, &output, reader.clone(), &peers),
+            io::output(2, &output, reader.clone(), &peers),
+            io::output(3, &output, reader.clone(), &peers)
         );
     });
 
