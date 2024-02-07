@@ -12,10 +12,7 @@ use std::{
 use tokio::{net::UdpSocket, sync::Mutex};
 use tun::platform::posix::{Reader, Writer};
 
-use crate::{
-    client::{io, loader},
-    server::auther,
-};
+use crate::client::{io, loader};
 
 async fn recv<'a, T>(
     socket: &'a UdpSocket,
@@ -72,36 +69,6 @@ where
     let sent = result.unwrap();
 
     return Ok(sent);
-}
-pub async fn try_auth(socket: &UdpSocket) -> Result<Ipv4Net, Error> {
-    trace!("Registering peer on the server");
-
-    info!("Sending information to server");
-
-    let mut buffer = [0; 4096];
-
-    trace!("Sending MAC address to server");
-    let mac = mac_address::get_mac_address().unwrap().unwrap();
-
-    if let Err(e) = send::<mac_address::MacAddress>(socket, &mac).await {
-        error!("failed to send the MAC address: {}", e);
-
-        return Err(e);
-    }
-
-    trace!("Sent MAC address to server");
-
-    trace!("Waiting for peer registration response");
-    let received = recv::<Ipv4Net>(socket, &mut buffer).await;
-    if let Err(e) = received {
-        error!("failed to receive the peer address");
-
-        return Err(e);
-    }
-
-    let (_, _, peer) = received.unwrap();
-
-    return Ok(peer);
 }
 
 struct Interface {
