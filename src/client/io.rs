@@ -12,13 +12,12 @@ use tun::platform::posix::{Reader, Writer};
 use crate::client::{data, IP};
 
 pub async fn input(
-    id: usize,
     socket: &UdpSocket,
     interface: Arc<Mutex<Writer>>,
     private_key: &rsa::RsaPrivateKey,
 ) {
     loop {
-        trace!("Receiving cycle {}", id);
+        trace!("Receiving cycle");
 
         let mut buffer = [0 as u8; 4096];
 
@@ -32,7 +31,7 @@ pub async fn input(
             }
         };
 
-        info!("Received {} bytes using {}", read, id);
+        info!("Received {} bytes", read);
 
         let interface = interface.clone();
         let private_key = private_key.clone();
@@ -58,7 +57,7 @@ pub async fn input(
                 drop(interface);
 
                 let wrote = to_write.unwrap();
-                info!("Wrote {} bytes using {}", wrote, id);
+                info!("Wrote {} bytes", wrote);
             } else {
                 info!("Packet read from socket is not IP");
             }
@@ -67,7 +66,6 @@ pub async fn input(
 }
 
 pub async fn output(
-    id: usize,
     socket: &UdpSocket,
     interface: Arc<Mutex<Reader>>,
     peers: &HashMap<net::Ipv4Addr, rsa::RsaPublicKey>,
@@ -75,7 +73,7 @@ pub async fn output(
     let mut buffer = [0 as u8; 4096];
 
     loop {
-        trace!("Sending cycle {}", id);
+        trace!("Sending cycle");
 
         let mut interface = interface.lock().await;
         let read = match interface.read(&mut buffer) {
@@ -89,7 +87,7 @@ pub async fn output(
         };
         drop(interface);
 
-        info!("Read {} bytes using {}", read, id);
+        info!("Read {} bytes", read);
 
         if let Ok(ip) = packet::ip::v4::Packet::new(&buffer[..read]) {
             let source: net::Ipv4Addr = ip.source();
@@ -136,7 +134,7 @@ pub async fn output(
                 }
             };
 
-            info!("Sent {} bytes using {}", sent, id);
+            info!("Sent {} bytes", sent,);
         } else {
             debug!("Packet read from tun is not IP");
         }

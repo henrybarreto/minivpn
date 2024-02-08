@@ -7,15 +7,15 @@ use std::{
     fs,
     io::{Error, Read},
     net::{Ipv4Addr, SocketAddr},
+    process::exit,
     sync::Arc,
 };
 
-use tokio::{net::UdpSocket, sync::Mutex};
+use tokio::{net::UdpSocket, sync::Mutex, time};
 use tun::platform::posix::{Reader, Writer};
 
 use serde::{Deserialize, Serialize};
 
-pub mod connect;
 pub mod data;
 pub mod io;
 pub mod loader;
@@ -34,7 +34,16 @@ async fn recv<'a, T>(
 where
     T: serde::de::Deserialize<'a>,
 {
-    let (read, addr) = match socket.recv_from(buffer).await {
+    let timeout =
+        tokio::time::timeout(time::Duration::from_secs(5), socket.recv_from(buffer)).await;
+    if timeout.is_err() {
+        return Err(Error::new(
+            std::io::ErrorKind::Other,
+            "failed to recv the buffer through the socket due timeout",
+        ));
+    }
+
+    let (read, addr) = match timeout.unwrap() {
         Ok((read, addr)) => (read, addr),
         Err(_) => {
             return Err(Error::new(
@@ -172,8 +181,8 @@ impl<'a> Authenticator<'a> {
     }
 }
 
-pub async fn connect(server: &str, port: &str, interface: &str) {
-    info!("Obirt connecting to {}:{}", server, port);
+pub async fn connect(server: &str, auth_port: &str, router_port: &str, interface: &str) {
+    info!("Obirt connecting to {}", server);
 
     let socket = if let Ok(socket) = UdpSocket::bind("0.0.0.0:0").await {
         socket
@@ -183,23 +192,31 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
 
     info!("Binded to {}", socket.local_addr().unwrap());
 
-    let authenticator = Authenticator::new(&socket, server.to_string(), String::from("1120"));
+    let authenticator = Authenticator::new(&socket, server.to_string(), auth_port.to_string());
     if let Err(e) = authenticator.connect().await {
         panic!("failed to connect to the authentication server: {}", e);
     }
 
-    let authentication = authenticator.authenticate().await;
-    if let Err(e) = authentication {
-        panic!("failed to authenticate on the authentication server: {}", e);
-    }
+    let peer: Ipv4Net;
 
-    let peer = authentication.unwrap();
+    loop {
+        let authentication = authenticator.authenticate().await;
+        if let Err(e) = authentication {
+            error!("failed to authenticate on the authentication server: {}", e);
+
+            continue;
+        }
+
+        peer = authentication.unwrap();
+
+        break;
+    }
 
     info!("Peer registered as {}", peer);
 
     let interface = Interface::new(interface, peer);
 
-    let router = format!("{}:{}", server, port);
+    let router = format!("{}:{}", server, router_port);
     dbg!(&router);
 
     trace!("Connecting to router");
@@ -230,40 +247,24 @@ pub async fn connect(server: &str, port: &str, interface: &str) {
     peers.insert(peer.addr(), public);
 
     let input = sockets.clone();
-
-    // NOTICE: this way to "increase" concurrency isn't the ideal.
-    let writer = interface.writer.clone();
-    tokio::spawn(async move {
-        tokio::join!(
-            io::input(0, &input, writer.clone(), &private),
-            io::input(1, &input, writer.clone(), &private),
-            io::input(2, &input, writer.clone(), &private),
-            io::input(3, &input, writer.clone(), &private)
-        );
-    });
-
     let output = sockets.clone();
 
-    let reader = interface.reader.clone();
-    tokio::spawn(async move {
-        tokio::join!(
-            io::output(0, &output, reader.clone(), &peers),
-            io::output(1, &output, reader.clone(), &peers),
-            io::output(2, &output, reader.clone(), &peers),
-            io::output(3, &output, reader.clone(), &peers)
-        );
-    });
+    tokio::spawn(async move { io::input(&input, interface.writer, &private).await });
+    tokio::spawn(async move { io::output(&output, interface.reader, &peers).await });
 
-    let sss = sockets.clone();
+    let pinger = sockets.clone();
+
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
     loop {
         trace!("Waiting for ping interval");
         interval.tick().await;
         trace!("Ping time interval reached");
 
-        let buffer = [254; 1];
-        if let Err(e) = sss.send(&buffer).await {
+        let keepalive = [254; 1];
+        if let Err(e) = pinger.send(&keepalive).await {
             error!("Failed to ping the server due {}", e);
+
+            exit(1);
         }
 
         info!("Ping");

@@ -3,7 +3,6 @@ use tokio::net::UdpSocket;
 use log::{info, trace};
 
 mod worker;
-use worker::worker;
 
 use crate::server::entities::{Address, Peers};
 
@@ -21,19 +20,9 @@ pub async fn start(peers: &impl Peers) {
     let socket = UdpSocket::bind(address.to_string()).await.unwrap();
     info!("Obirt router listening for packets on {}", address.port);
 
-    trace!("Starting routers workers");
+    trace!("Starting routing worker");
 
-    // TODO: create workers based on CPU.
-    tokio::join!(
-        worker(0, &socket, peers),
-        worker(1, &socket, peers),
-        worker(2, &socket, peers),
-        worker(3, &socket, peers),
-        worker(4, &socket, peers),
-        worker(5, &socket, peers),
-        worker(6, &socket, peers),
-        worker(7, &socket, peers),
-    );
+    worker::init(&socket, peers).await;
 
-    info!("Stopping Obirt router")
+    info!("Obirt router stopped")
 }

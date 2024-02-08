@@ -28,11 +28,17 @@ async fn main() {
                         .required(true),
                 )
                 .arg(
-                    Arg::new("port")
-                        .long("port")
-                        .short('p')
-                        .help("Server port")
-                        .value_name("PORT")
+                    Arg::new("auth-port")
+                        .long("auth-port")
+                        .help("Auth server port")
+                        .value_name("AUTH_PORT")
+                        .default_value("1120"),
+                )
+                .arg(
+                    Arg::new("router-port")
+                        .long("router-port")
+                        .help("Router server port")
+                        .value_name("ROUTER_PORT")
                         .default_value("9807"),
                 )
                 .arg(
@@ -46,17 +52,15 @@ async fn main() {
         )
         .subcommand(Command::new("server").about("Start a server"))
         .subcommand(
-            Command::new("generate")
-                .about("Generate a new keypair")
-                .arg(
-                    Arg::new("force")
-                        .long("force")
-                        .short('f')
-                        .help("Force generation of new keypair")
-                        .value_name("FORCE")
-                        .value_parser(clap::value_parser!(bool))
-                        .default_value("false"),
-                ),
+            Command::new("keypair").about("Generate a new keypair").arg(
+                Arg::new("force")
+                    .long("force")
+                    .short('f')
+                    .help("Force the generation of new the keypair")
+                    .value_name("FORCE")
+                    .value_parser(clap::value_parser!(bool))
+                    .default_value("false"),
+            ),
         )
         .subcommand(Command::new("info").about("Show information about the connection"))
         .get_matches();
@@ -64,17 +68,18 @@ async fn main() {
     match matches.subcommand() {
         Some(("client", command)) => {
             let server = command.get_one::<String>("address").unwrap();
-            let port = command.get_one::<String>("port").unwrap();
+            let auth_port = command.get_one::<String>("auth-port").unwrap();
+            let router_port = command.get_one::<String>("router-port").unwrap();
             let interface = command.get_one::<String>("interface").unwrap();
 
-            client::connect(server, port, interface).await;
+            client::connect(server, auth_port, router_port, interface).await;
         }
         Some(("server", _)) => {
             let peers = MemPeers::default();
 
             tokio::join!(auther::start(&peers), router::start(&peers));
         }
-        Some(("generate", command)) => {
+        Some(("keypair", command)) => {
             let force = command.get_one::<bool>("force").unwrap();
 
             if keypair(*force).await {

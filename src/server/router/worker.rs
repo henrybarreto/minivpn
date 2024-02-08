@@ -22,8 +22,7 @@ pub struct Sent {
 }
 
 pub async fn recv(socket: &UdpSocket) -> Result<Received, Error> {
-    // TODO: what should be the correct size of this buffer?
-    let mut buffer: Vec<u8> = vec![0; 1000000];
+    let mut buffer: Vec<u8> = vec![0; 4096];
     let (read, addr) = match socket.recv_from(&mut buffer).await {
         Ok((read, addr)) => (read, addr),
         Err(e) => {
@@ -56,14 +55,14 @@ pub async fn send(socket: &UdpSocket, addr: SocketAddr, buffer: Vec<u8>) -> Resu
     });
 }
 
-/// worker deals with IP packages, redirect it to the right peer.
-pub async fn worker(id: u8, socket: &UdpSocket, peers: &impl Peers) {
-    info!("worker {} started", id);
+/// init the worker to deals with IP packages, redirect it to the right peer.
+pub async fn init(socket: &UdpSocket, peers: &impl Peers) {
+    info!("worker started");
 
     loop {
-        trace!("Packet router cycle {}", id);
+        trace!("Packet router cycle",);
 
-        trace!("Waiting for packet on worker {}", id);
+        trace!("Waiting for packet on worker");
         let received = recv(&socket).await;
         if let Err(e) = received {
             error!("Error receiving packet");
@@ -74,10 +73,7 @@ pub async fn worker(id: u8, socket: &UdpSocket, peers: &impl Peers) {
 
         let data = received.unwrap();
 
-        debug!(
-            "Packet from {} reading {} on worker {}",
-            data.addr, data.read, id
-        );
+        debug!("Packet from {} reading {} on worker", data.addr, data.read);
 
         let packet: IP = match bincode::deserialize(&data.data) {
             Ok(packet) => packet,
@@ -130,8 +126,8 @@ pub async fn worker(id: u8, socket: &UdpSocket, peers: &impl Peers) {
         }
 
         let sent = data.unwrap();
-        debug!("Data sent to {} on worker {}", sent.addr, id);
+        debug!("Data sent to {} on worker", sent.addr);
 
-        info!("Packet sent from {} to {}", source, destination);
+        info!("Packet routed from {} to {}", source, destination);
     }
 }
