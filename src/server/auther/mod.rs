@@ -4,8 +4,10 @@ use std::{
     net::{Ipv4Addr, SocketAddr},
 };
 
+use openssl::{self, rsa::Padding};
+
 use ipnet::Ipv4Net;
-use log::{error, info};
+use log::{error, info, trace};
 use tokio::net::UdpSocket;
 
 use crate::server::entities::{Address, Peer, Peers};
@@ -78,11 +80,64 @@ pub async fn start(peers: &impl Peers) {
         address.port
     );
 
+    // let key = b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F";
+
     let mut table = HashMap::<mac_address::MacAddress, Ipv4Addr>::new();
+
+    let server_private_key = openssl::rsa::Rsa::generate(2048).unwrap();
+    let server_public_key = server_private_key.public_key_to_pem().unwrap();
+
+    let aes_bytes = b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F";
+    // let aes_key = openssl::aes::AesKey::new_encrypt(aes_bytes).unwrap();
 
     let mut counter = 0;
     loop {
-        let mut buffer = [0; 4096];
+        let mut buffer = vec![0; 4096];
+
+        trace!("receiving peer public key");
+
+        let received = recv::<Vec<u8>>(&socket, &mut buffer).await;
+        if let Err(_) = received {
+            error!("Error receiving the public key");
+
+            continue;
+        }
+
+        trace!("peer public key received");
+
+        let (key, addr) = received.unwrap();
+
+        let decode = openssl::rsa::Rsa::public_key_from_pem(&key);
+        if decode.is_err() {
+            error!("data present as RSA public key isn't valid");
+
+            continue;
+        }
+
+        let peer_public_key = decode.unwrap();
+
+        trace!("sending server public key");
+
+        if let Err(_) = send(&socket, addr, &server_public_key).await {
+            error!("failed to send the server public key");
+
+            continue;
+        }
+
+        trace!("server public key sent");
+
+        let mut encrypted_key = vec![0; 4096];
+        let encrypted_key_size = peer_public_key
+            .public_encrypt(aes_bytes, &mut encrypted_key, Padding::PKCS1)
+            .unwrap();
+
+        let to_send_encrypted_key = &encrypted_key[..encrypted_key_size];
+
+        if let Err(_) = send(&socket, addr, &to_send_encrypted_key).await {
+            error!("failed to send the AES key");
+
+            continue;
+        }
 
         let received = recv::<mac_address::MacAddress>(&socket, &mut buffer).await;
         if let Err(_) = received {

@@ -1,14 +1,12 @@
 use bincode;
 use ipnet::Ipv4Net;
 use log::{error, info, trace};
-use rsa::{pkcs1::DecodeRsaPublicKey, RsaPublicKey};
+use openssl::rsa::Padding;
 use std::{
-    collections::HashMap,
-    fs,
     io::{Error, Read},
     net::{Ipv4Addr, SocketAddr},
     process::exit,
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use tokio::{net::UdpSocket, sync::Mutex, time};
@@ -18,7 +16,8 @@ use serde::{Deserialize, Serialize};
 
 pub mod data;
 pub mod io;
-pub mod loader;
+
+pub static AES_KEY: OnceLock<Vec<u8>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IP {
@@ -152,12 +151,72 @@ impl<'a> Authenticator<'a> {
 
         info!("Sending information to server");
 
-        let mut buffer = [0; 4096];
+        let mut buffer = vec![0; 4096];
+
+        let socket = self.socket;
+
+        let peer_private_key = openssl::rsa::Rsa::generate(2048).unwrap();
+        let peer_public_key = peer_private_key.public_key_to_pem().unwrap();
+
+        trace!("sending peer public key");
+
+        if let Err(e) = send::<Vec<u8>>(&socket, &peer_public_key).await {
+            error!("failed to send peer public key");
+
+            return Err(e);
+        }
+
+        trace!("peer public key sent");
+
+        trace!("receiving server public key");
+
+        let received = recv::<Vec<u8>>(&socket, &mut buffer).await;
+        if let Err(e) = received {
+            error!("failed to receive the server public key ");
+
+            return Err(e);
+        }
+
+        trace!("server public key received");
+
+        let (_, _, key) = received.unwrap();
+
+        let decode = openssl::rsa::Rsa::public_key_from_pem(&key);
+        if let Err(_) = decode {
+            error!("Data present as RSA public key isn't valid");
+
+            return Err(Error::new(
+                std::io::ErrorKind::Other,
+                "Data present as RSA public key isn't valid",
+            ));
+        }
+
+        let server_public_key = decode.unwrap();
+
+        trace!("receiving aes key");
+
+        let received = recv::<Vec<u8>>(&socket, &mut buffer).await;
+        if let Err(e) = received {
+            error!("failed to receive the server AES key ");
+
+            return Err(e);
+        }
+
+        trace!("server aes key received");
+
+        let (_, _, encrypted_key) = received.unwrap();
+
+        let mut aes_bytes = vec![0; 4096];
+        let aes_bytes_size = peer_private_key
+            .private_decrypt(&encrypted_key, &mut aes_bytes, Padding::PKCS1)
+            .unwrap();
+
+        AES_KEY
+            .set(Vec::from(&aes_bytes[..aes_bytes_size]))
+            .unwrap();
 
         trace!("Sending MAC address to server");
         let mac = mac_address::get_mac_address().unwrap().unwrap();
-
-        let socket = self.socket;
 
         if let Err(e) = send::<mac_address::MacAddress>(&socket, &mac).await {
             error!("failed to send the MAC address: {}", e);
@@ -229,28 +288,11 @@ pub async fn connect(server: &str, auth_port: &str, router_port: &str, interface
 
     info!("Connected to router");
 
-    let mut peers: HashMap<Ipv4Addr, RsaPublicKey> = loader::peers().await;
-
-    let mut buffer = [0; 4096];
-    let mut file = fs::File::open("./public.txt").unwrap();
-    file.read(&mut buffer).unwrap();
-
-    let public_str = std::str::from_utf8(&buffer[..])
-        .unwrap()
-        .trim_matches(char::from(0));
-
-    let public = rsa::RsaPublicKey::from_pkcs1_pem(&public_str).unwrap();
-    let private = loader::private().await;
-
-    info!("Private and public keys loaded");
-
-    peers.insert(peer.addr(), public);
-
     let input = sockets.clone();
     let output = sockets.clone();
 
-    tokio::spawn(async move { io::input(&input, interface.writer, &private).await });
-    tokio::spawn(async move { io::output(&output, interface.reader, &peers).await });
+    tokio::spawn(async move { io::input(&input, interface.writer).await });
+    tokio::spawn(async move { io::output(&output, interface.reader).await });
 
     let pinger = sockets.clone();
 

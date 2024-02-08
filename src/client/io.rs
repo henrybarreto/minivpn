@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     io::{Read, Write},
     net,
     sync::Arc,
@@ -11,15 +10,15 @@ use tun::platform::posix::{Reader, Writer};
 
 use crate::client::{data, IP};
 
-pub async fn input(
-    socket: &UdpSocket,
-    interface: Arc<Mutex<Writer>>,
-    private_key: &rsa::RsaPrivateKey,
-) {
+use super::AES_KEY;
+
+pub async fn input(socket: &UdpSocket, interface: Arc<Mutex<Writer>>) {
+    let dec_key = AES_KEY.get().unwrap();
+
     loop {
         trace!("Receiving cycle");
 
-        let mut buffer = [0 as u8; 4096];
+        let mut buffer = vec![0 as u8; 4096];
 
         let recved = socket.recv(&mut buffer).await;
         let read = match recved {
@@ -33,43 +32,32 @@ pub async fn input(
 
         info!("Received {} bytes", read);
 
+        let buffer = data::decrypt(Vec::from(&buffer[..read]), &dec_key).unwrap();
+
         let interface = interface.clone();
-        let private_key = private_key.clone();
-        tokio::spawn(async move {
-            let packet = match data::decrypt(buffer[..read].to_vec(), &private_key) {
-                Ok(e) => e,
-                Err(e) => {
-                    error!("Failed to decrypt packet due to {}", e);
 
-                    return;
-                }
-            };
+        if let Ok(_ip) = packet::ip::v4::Packet::new(&buffer[..buffer.len()]) {
+            let mut interface = interface.lock().await;
+            let to_write = interface.write(&buffer[..buffer.len()]);
+            if let Err(e) = to_write {
+                error!("Failed to write packet due to {}", e);
 
-            if let Ok(_ip) = packet::ip::v4::Packet::new(&packet[..packet.len()]) {
-                let mut interface = interface.lock().await;
-                let to_write = interface.write(&packet[..packet.len()]);
-                if let Err(e) = to_write {
-                    error!("Failed to write packet due to {}", e);
-
-                    drop(interface);
-                    return;
-                }
                 drop(interface);
-
-                let wrote = to_write.unwrap();
-                info!("Wrote {} bytes", wrote);
-            } else {
-                info!("Packet read from socket is not IP");
+                return;
             }
-        });
+            drop(interface);
+
+            let wrote = to_write.unwrap();
+            info!("Wrote {} bytes", wrote);
+        } else {
+            info!("Packet read from socket is not IP");
+        }
     }
 }
 
-pub async fn output(
-    socket: &UdpSocket,
-    interface: Arc<Mutex<Reader>>,
-    peers: &HashMap<net::Ipv4Addr, rsa::RsaPublicKey>,
-) {
+pub async fn output(socket: &UdpSocket, interface: Arc<Mutex<Reader>>) {
+    let enc_key = AES_KEY.get().unwrap();
+
     let mut buffer = [0 as u8; 4096];
 
     loop {
@@ -94,30 +82,12 @@ pub async fn output(
             let destination: net::Ipv4Addr = ip.destination();
             debug!("Packet read from tun is IP");
 
-            let got = peers.get(&destination);
-            if let None = got {
-                error!("Client does not have a public key to this peer");
-                dbg!(&destination);
-
-                continue;
-            };
-
-            let key = got.unwrap();
-            let data = match data::encrypt(buffer[..read].to_vec(), key) {
-                Ok(e) => e,
-                Err(e) => {
-                    error!("Failed to encrypt packet due to {}", e);
-
-                    continue;
-                }
-            };
-
             let sent = match socket
                 .send(
                     &bincode::serialize(&IP {
                         source,
                         destination,
-                        data,
+                        data: data::encrypt(Vec::from(&buffer[..read]), &enc_key).unwrap(),
                     })
                     .unwrap(),
                 )

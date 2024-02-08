@@ -9,14 +9,14 @@ use crate::server::entities::Peers;
 
 #[derive(Debug, Clone)]
 pub struct Received {
-    pub read: usize,
+    pub size: usize,
     pub addr: SocketAddr,
     pub data: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Sent {
-    pub wrote: usize,
+    pub size: usize,
     pub addr: SocketAddr,
     pub data: Vec<u8>,
 }
@@ -31,7 +31,7 @@ pub async fn recv(socket: &UdpSocket) -> Result<Received, Error> {
     };
 
     return Ok(Received {
-        read,
+        size: read,
         addr,
         data: buffer,
     });
@@ -49,7 +49,7 @@ pub async fn send(socket: &UdpSocket, addr: SocketAddr, buffer: Vec<u8>) -> Resu
     let wrote = sent.unwrap();
 
     return Ok(Sent {
-        wrote,
+        size: wrote,
         addr,
         data: buffer,
     });
@@ -71,11 +71,14 @@ pub async fn init(socket: &UdpSocket, peers: &impl Peers) {
             continue;
         }
 
-        let data = received.unwrap();
+        let buffer = received.unwrap();
 
-        debug!("Packet from {} reading {} on worker", data.addr, data.read);
+        debug!(
+            "Packet from {} reading {} on worker",
+            buffer.addr, buffer.size
+        );
 
-        let packet: IP = match bincode::deserialize(&data.data) {
+        let packet: IP = match bincode::deserialize(&buffer.data[..buffer.size]) {
             Ok(packet) => packet,
             Err(e) => {
                 error!("Error deserializing packet");
@@ -99,12 +102,12 @@ pub async fn init(socket: &UdpSocket, peers: &impl Peers) {
 
         let from = got.unwrap();
 
-        if from.addr != data.addr {
+        if from.addr != buffer.addr {
             // TODO: send message to restart the client.
 
             error!("Peer source does not match source address");
             dbg!(&from.addr);
-            dbg!(&data.addr);
+            dbg!(&buffer.addr);
 
             continue;
         }
