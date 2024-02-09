@@ -4,6 +4,9 @@
 
 <h3 align="center">A simple VPN</h3>
 
+> [!NOTE]  
+> The protocol isn't done. I am constantly improvement it and the code itself.
+
 # How to use
 
 Start a server
