@@ -256,14 +256,12 @@ pub async fn connect(server: &str, auth_port: &str, router_port: &str, interface
         panic!("failed to connect to the authentication server: {}", e);
     }
 
-    let peer: Ipv4Net;
-
     let authentication = authenticator.authenticate().await;
     if let Err(e) = authentication {
         panic!("failed to authenticate on the authentication server: {}", e);
     }
 
-    peer = authentication.unwrap();
+    let peer = authentication.unwrap();
 
     info!("Peer registered as {}", peer);
 
