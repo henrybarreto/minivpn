@@ -258,18 +258,12 @@ pub async fn connect(server: &str, auth_port: &str, router_port: &str, interface
 
     let peer: Ipv4Net;
 
-    loop {
-        let authentication = authenticator.authenticate().await;
-        if let Err(e) = authentication {
-            error!("failed to authenticate on the authentication server: {}", e);
-
-            continue;
-        }
-
-        peer = authentication.unwrap();
-
-        break;
+    let authentication = authenticator.authenticate().await;
+    if let Err(e) = authentication {
+        panic!("failed to authenticate on the authentication server: {}", e);
     }
+
+    peer = authentication.unwrap();
 
     info!("Peer registered as {}", peer);
 
