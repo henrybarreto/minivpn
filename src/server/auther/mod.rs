@@ -69,6 +69,91 @@ where
     return Ok(sent);
 }
 
+fn decrypt<'a>(data: &'a [u8], key: &'a [u8]) -> Result<Vec<u8>, rsa::Error> {
+    let chipher = openssl::symm::Cipher::aes_128_ecb();
+
+    let decrypted = openssl::symm::decrypt(chipher, key, None, &data).unwrap();
+
+    return Ok(decrypted);
+}
+
+fn encrypt<'a>(data: &'a [u8], key: &'a [u8]) -> Result<Vec<u8>, rsa::Error> {
+    let chipher = openssl::symm::Cipher::aes_128_ecb();
+
+    let encrypted = openssl::symm::encrypt(chipher, key, None, &data).unwrap();
+
+    return Ok(encrypted.to_owned());
+}
+
+async fn recv_enc<'a, T>(
+    socket: &'a UdpSocket,
+    buffer: &'a mut [u8],
+    key: &'a [u8],
+) -> Result<(T, SocketAddr), Error>
+where
+    T: serde::de::Deserialize<'a>,
+{
+    let (size, addr) = match socket.recv_from(buffer).await {
+        Ok((read, addr)) => (read, addr),
+        Err(_) => {
+            return Err(Error::new(
+                std::io::ErrorKind::Other,
+                "failed to recv the buffer through the socket",
+            ));
+        }
+    };
+
+    let decrypted_value = decrypt(&buffer[..size], key).unwrap();
+    let decrypted: &'a [u8] = decrypted_value.leak();
+
+    let model: T = match bincode::deserialize::<'a>(decrypted) {
+        Ok(mac) => mac,
+        Err(_) => {
+            return Err(Error::new(
+                std::io::ErrorKind::InvalidData,
+                "failed to deserialize the data received",
+            ))
+        }
+    };
+
+    return Ok((model, addr));
+}
+
+async fn send_dec<'a, T>(
+    socket: &'a UdpSocket,
+    addr: SocketAddr,
+    model: &'a T,
+    key: &'a [u8],
+) -> Result<usize, Error>
+where
+    T: serde::ser::Serialize,
+{
+    let ser = bincode::serialize(&model);
+    if let Err(_) = ser {
+        return Err(Error::new(
+            std::io::ErrorKind::InvalidData,
+            "failed to serialize the data to send",
+        ));
+    }
+
+    let buffer = ser.unwrap();
+
+    let encrypted_value = encrypt(&buffer[..buffer.len()], key).unwrap();
+    let encrypted: &'a [u8] = encrypted_value.leak();
+
+    let result = socket.send_to(&encrypted, addr).await;
+    if let Err(_) = result {
+        return Err(Error::new(
+            std::io::ErrorKind::Other,
+            "failed to send the buffer through the socket",
+        ));
+    }
+
+    let sent = result.unwrap();
+
+    return Ok(sent);
+}
+
 pub async fn start(peers: &impl Peers) {
     info!("Initing Obirt authenticator");
 
@@ -139,7 +224,9 @@ pub async fn start(peers: &impl Peers) {
             continue;
         }
 
-        let received = recv::<mac_address::MacAddress>(&socket, &mut buffer).await;
+        // ---
+
+        let received = recv_enc::<mac_address::MacAddress>(&socket, &mut buffer, aes_bytes).await;
         if let Err(_) = received {
             error!("Error deserializing MAC address");
 
@@ -158,7 +245,7 @@ pub async fn start(peers: &impl Peers) {
 
             info!("Sending peer address to {}", addr);
 
-            if let Err(_) = send(&socket, addr, &peer).await {
+            if let Err(_) = send_dec(&socket, addr, &peer, aes_bytes).await {
                 error!("failed to send the peer addres through the socket");
 
                 continue;
@@ -175,7 +262,7 @@ pub async fn start(peers: &impl Peers) {
 
             info!("Sending peer address to {}", addr);
 
-            if let Err(_) = send(&socket, addr, &peer).await {
+            if let Err(_) = send_dec(&socket, addr, &peer, aes_bytes).await {
                 error!("failed to send the peer addres through the socket");
 
                 continue;

@@ -117,6 +117,95 @@ impl Interface {
     }
 }
 
+fn decrypt<'a>(data: &'a [u8], key: &'a [u8]) -> Result<Vec<u8>, rsa::Error> {
+    let chipher = openssl::symm::Cipher::aes_128_ecb();
+
+    let decrypted = openssl::symm::decrypt(chipher, key, None, &data).unwrap();
+
+    return Ok(decrypted);
+}
+
+fn encrypt<'a>(data: &'a [u8], key: &'a [u8]) -> Result<Vec<u8>, rsa::Error> {
+    let chipher = openssl::symm::Cipher::aes_128_ecb();
+
+    let encrypted = openssl::symm::encrypt(chipher, key, None, &data).unwrap();
+
+    return Ok(encrypted.to_owned());
+}
+
+async fn recv_enc<'a, T>(
+    socket: &'a UdpSocket,
+    buffer: &'a mut [u8],
+    key: &'a [u8],
+) -> Result<(usize, SocketAddr, T), Error>
+where
+    T: serde::de::Deserialize<'a>,
+{
+    let timeout =
+        tokio::time::timeout(time::Duration::from_secs(5), socket.recv_from(buffer)).await;
+    if timeout.is_err() {
+        return Err(Error::new(
+            std::io::ErrorKind::Other,
+            "failed to recv the buffer through the socket due timeout",
+        ));
+    }
+
+    let (read, addr) = match timeout.unwrap() {
+        Ok((read, addr)) => (read, addr),
+        Err(_) => {
+            return Err(Error::new(
+                std::io::ErrorKind::Other,
+                "failed to recv the buffer through the socket",
+            ));
+        }
+    };
+
+    let decrypted_value = decrypt(&buffer[..read], key).unwrap();
+    let decrypted: &'a [u8] = decrypted_value.leak();
+
+    let model: T = match bincode::deserialize::<'a>(&decrypted) {
+        Ok(mac) => mac,
+        Err(_) => {
+            return Err(Error::new(
+                std::io::ErrorKind::InvalidData,
+                "failed to deserialize the data received",
+            ))
+        }
+    };
+
+    return Ok((read, addr, model));
+}
+
+async fn send_dec<'a, T>(socket: &'a UdpSocket, model: &'a T, key: &'a [u8]) -> Result<usize, Error>
+where
+    T: serde::ser::Serialize,
+{
+    let ser = bincode::serialize(&model);
+    if let Err(_) = ser {
+        return Err(Error::new(
+            std::io::ErrorKind::InvalidData,
+            "failed to serialize the data to send",
+        ));
+    }
+
+    let buffer = ser.unwrap();
+
+    let encrypted_value = encrypt(&buffer[..buffer.len()], key).unwrap();
+    let encrypted: &'a [u8] = encrypted_value.leak();
+
+    let result = socket.send(&encrypted).await;
+    if let Err(_) = result {
+        return Err(Error::new(
+            std::io::ErrorKind::Other,
+            "failed to send the buffer through the socket",
+        ));
+    }
+
+    let sent = result.unwrap();
+
+    return Ok(sent);
+}
+
 struct Authenticator<'a> {
     socket: &'a UdpSocket,
     address: String,
@@ -218,7 +307,9 @@ impl<'a> Authenticator<'a> {
         trace!("Sending MAC address to server");
         let mac = mac_address::get_mac_address().unwrap().unwrap();
 
-        if let Err(e) = send::<mac_address::MacAddress>(&socket, &mac).await {
+        if let Err(e) =
+            send_dec::<mac_address::MacAddress>(&socket, &mac, AES_KEY.get().unwrap()).await
+        {
             error!("failed to send the MAC address: {}", e);
 
             return Err(e);
@@ -227,7 +318,7 @@ impl<'a> Authenticator<'a> {
         trace!("Sent MAC address to server");
 
         trace!("Waiting for peer registration response");
-        let received = recv::<Ipv4Net>(&socket, &mut buffer).await;
+        let received = recv_enc::<Ipv4Net>(&socket, &mut buffer, AES_KEY.get().unwrap()).await;
         if let Err(e) = received {
             error!("failed to receive the peer address");
 
