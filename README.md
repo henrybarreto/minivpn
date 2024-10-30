@@ -38,6 +38,8 @@ client ->> server: Send Mac address
 server ->> server: Store the client information in the server
 server -->> client: Receive IP and Mask to bind
 client ->>+ interface: Create network interface
+interface ->>+ client: Confirm interface creation
+
 
 loop Keep alive
     client ->> server: Send keep alive package
@@ -59,7 +61,7 @@ end
 client ->> server: Close
 server ->>- client: Close
 client ->> interface: Close network interface
-interface ->>- client: Confrim close on network interface
+interface ->>- client: Confirm close on network interface
 ```
 
 ## The Server
