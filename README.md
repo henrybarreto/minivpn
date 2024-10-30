@@ -49,8 +49,7 @@ loop Every IP package
     client ->> client: Encrypt the package
     client ->> server: Send the IP package to server
     server ->> server: Look for the package's destination and sent it
-    end
-    par From Server
+    and From Server
     server ->> client: Send the IP package to client
     client ->> client: Decrypt the package
     client ->> interface: Send the IP package
